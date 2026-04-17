@@ -203,10 +203,12 @@ function interpolate_tension!(Fu, bub_F, bub_x, fractions, setup)
             # Indicator for if marker is to the RIGHT of current velocity point in each dimension
             right1 = xu[dim][1][I[1]] <= m[1]
             right2 = xu[dim][2][I[2]] <= m[2]
-
+            s1 = right1 ? 1 : -1
+            s2 = right2 ? 1 : -1
+            
             # Compute interpolation weights (take absolute value in case m is "left")
-            a1 = (m[1] - xu[dim][1][I[1] + right1 - 1]) / (xu[dim][1][I[1] + right1] - xu[dim][1][I[1] + right1 - 1]) |> abs
-            a2 = (m[2] - xu[dim][2][I[2] + right2 - 1]) / (xu[dim][2][I[2] + right2] - xu[dim][2][I[2] + right2 - 1]) |> abs
+            a1 = (m[1] - xu[dim][1][I[1]]) / (xu[dim][1][I[1] + s1] - xu[dim][1][I[1]]) |> abs
+            a2 = (m[2] - xu[dim][2][I[2]]) / (xu[dim][2][I[2] + s2] - xu[dim][2][I[2]]) |> abs
 
             # Add contribution from current marker
             t = bub_F[ipoint][dim]
