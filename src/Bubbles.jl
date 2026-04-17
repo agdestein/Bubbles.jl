@@ -5,7 +5,7 @@ using CUDA
 using CUDSS
 using LinearAlgebra
 using StaticArrays
-using WGLMakie
+using Makie
 
 import AcceleratedKernels as AK
 import IncompressibleNavierStokes as NS
@@ -21,12 +21,13 @@ getparams() = (;
     n = 64, # Number of grid points
 
     # Flow
-    viscosity = 5.0e-4,
-    lidvelocity = 0.0,
+    lidvelocity = 1.0,
     gravity = (0.0, -9.81),
     # densities = (; liquid = 1.0e3, gas = 1.25),
-    densities = (; liquid = 1.0, gas = 1e-3),
-    viscosities = (; liquid = 1.0e-3, gas = 1.8e-5),
+    # densities = (; liquid = 1.0, gas = 1e-3),
+    # viscosities = (; liquid = 1.0e-3, gas = 1.8e-5),
+    densities = (; liquid = 1.0, gas = 1.0),
+    viscosities = (; liquid = 5.0e-4, gas = 5.0e-4),
 
     # Bubble
     bubble = (;
@@ -166,19 +167,17 @@ end
 "Interpolate surface tension force at markers to velocity points."
 function interpolate_tension!(Fu, bub_F, bub_x, fractions, setup)
     (; densities) = getparams()
-    (; Δ, Iu, xp) = setup
-    xu = setup.x[1][2:end], setup.x[2][2:end]
+    (; Δ, Iu, xp, xu) = setup
     npoint = length(bub_x)
 
     # Loop through all velocity components and let that component receive its due contribution of the integral of the force
     # for dim in 1:2, I in Iu[dim]
     AK.foreachindex(Fu) do index
-        II = CartesianIndices(Fu)[index]
-        i, j, dim = II.I
-        I = CartesianIndex(i, j)
-        otherdim = ifelse(dim == 1, 2, 1)
-        # i, j = I.I
+        II = CartesianIndices(Fu)[index] # Total Cartesian index
+        I = CartesianIndex(II[1], II[2]) # Physical space coordinate Cartesian index
+        dim = II[3] # Spatial dimension of velocity component
 
+        # Don't compute force at boundary points, since this would query coordinates outside the domain
         I in Iu[dim] || return nothing
 
         # Accumulator for `dim`-component of marker forces
@@ -186,41 +185,42 @@ function interpolate_tension!(Fu, bub_F, bub_x, fractions, setup)
 
         # Loop through all markers and add their contribution to the current velocity point (if any).
         for ipoint in 1:npoint
+            # Find control points of current marker
             p = bub_x[ipoint]
             q = bub_x[mod1(ipoint + 1, npoint)]
 
             # Compute center of current marker
             m = (p + q) / 2
 
-            # # Find index of first points to the RIGHT
-            # i1p = findfirst(>(m[1]), xp[1])
-            # i1u = findfirst(>(m[1]), xu[1])
-            # i2p = findfirst(>(m[2]), xp[2])
-            # i2u = findfirst(>(m[2]), xu[2])
+            # Check if marker lies within "reach" of velocity point
+            within1 = xu[dim][1][I[1]-1] <= m[1] <= xu[dim][1][I[1]+1]
+            within2 = xu[dim][2][I[2]-1] <= m[2] <= xu[dim][2][I[2]+1]
+            within = within1 && within2
 
-            # Find index of first points to the RIGHT
-            i1p = 1; while i1p < length(xp[1]) && xp[1][i1p] < m[1]; i1p += 1; end
-            i1u = 1; while i1u < length(xu[1]) && xu[1][i1u] < m[1]; i1u += 1; end
-            i2p = 1; while i2p < length(xp[2]) && xp[2][i2p] < m[2]; i2p += 1; end
-            i2u = 1; while i2u < length(xu[2]) && xu[2][i2u] < m[2]; i2u += 1; end
+            # Continue to next marker if not within
+            within || continue
 
-            if dim == 1
-                a1 = (m[1] - xu[i1u - 1]) / (xu[i1u] - xu[i1u - 1])
-            else
-            end
+            # Indicator for if marker is to the RIGHT of current velocity point in each dimension
+            right1 = xu[dim][1][I[1]] <= m[1]
+            right2 = xu[dim][2][I[2]] <= m[2]
+
+            # Compute interpolation weights (take absolute value in case m is "left")
+            a1 = (m[1] - xu[dim][1][I[1] + right1 - 1]) / (xu[dim][1][I[1] + right1] - xu[dim][1][I[1] + right1 - 1]) |> abs
+            a2 = (m[2] - xu[dim][2][I[2] + right2 - 1]) / (xu[dim][2][I[2] + right2] - xu[dim][2][I[2] + right2 - 1]) |> abs
 
             # Add contribution from current marker
+            t = bub_F[ipoint][dim]
+            contribution = (1 - a1) * (1 - a2) * t
             FuI += contribution
         end
 
-        # Density in current point
-        a = (fractions[I] + fractions[right(I, dim, 1)]) / 2 # Interpolate to velocity point
-        dens = (1 - a) * densities.liquid + a * densities.gas
+        # # Density in current point
+        # a = (fractions[I] + fractions[right(I, dim, 1)]) / 2 # Interpolate to velocity point
+        # dens = (1 - a) * densities.liquid + a * densities.gas
 
         # Now write the total contribution from all markers to the current velocity point.
         # Add to existing force (convection-diffusion etc.).
-        # Also normalize by the current grid spacing, since all the integrals are weighed by marker lengths
-        Fu[I, dim] += FuI / Δ[otherdim][I[otherdim]] / dens
+        Fu[I, dim] += FuI
 
         return nothing
     end
@@ -435,7 +435,6 @@ function convectiondiffusion_nonconstant!(f, u, fractions, setup)
         a = (fractions[I] + fractions[right(I, dim, 1)]) / 2 # Interpolate to velocity point
         dens = (1 - a) * densities.liquid + a * densities.gas
         visc = dens / ((1 - a) * densities.liquid / viscosities.liquid + a * densities.gas / viscosities.gas)
-        # visc = viscosity
         f[II] += conv + visc * diff
         return nothing
     end
@@ -458,7 +457,7 @@ Wray's low-storage RK3 method is used, which only relies on two
 temporary registers `F` and `U0` (same size as `U`).
 In addition, we need a pressure register `p` and a surface tension register `tension`.
 """
-function rk3step!(F, U0, U, t, dt, fractions, tension, p, psolver, viscosity, setup)
+function rk3step!(F, U0, U, t, dt, fractions, tension, p, psolver, setup)
     # RK coefficients
     a = 8 / 15, 5 / 12, 3 / 4
     b = 1 / 4, 0.0
@@ -598,7 +597,7 @@ end
 
 function solveandplot(u, x, xcenter, setup, psolver)
     params = getparams()
-    (; viscosity, dt, nsubstep, nstep, animation) = params
+    (; dt, nsubstep, nstep, animation) = params
     (; markerlims, angle_min) = params.bubble
 
     # Allocate registers
@@ -623,7 +622,7 @@ function solveandplot(u, x, xcenter, setup, psolver)
     for itime in 1:nstep
         for isub in 1:nsubstep
             # Perform one RK3 step of step size `dt`
-            rk3step!(F, U0, U, t, dt, fractions, tension, p, psolver, viscosity, setup)
+            rk3step!(F, U0, U, t, dt, fractions, tension, p, psolver, setup)
             t += dt
 
             # Remesh the bubble.
@@ -812,11 +811,14 @@ end
 function plot_insidemarkers(u, x, xcenter, setup)
     insidemarkers = similar(NS.scalarfield(setup), Bool)
     mark_inside_points!(setup, insidemarkers, x, xcenter)
+    cpu = AK.KernelAbstractions.CPU()
+    m = adapt(cpu, insidemarkers)
+    xp = adapt(cpu, setup.xp)
     fig = Figure()
     ax = Axis(fig[1, 1])
-    heatmap!(ax, setup.xp..., insidemarkers)
-    scatterlines!(ax, map(Point2, x))
-    scatter!(ax, map(Point2, xcenter); color = Cycled(3))
+    heatmap!(ax, xp..., m)
+    scatterlines!(ax, map(Point2, adapt(cpu, x)))
+    scatter!(ax, map(Point2, adapt(cpu, xcenter)); color = Cycled(3))
     return fig
 end
 
@@ -825,9 +827,12 @@ function plot_fractions(u, x, xcenter, setup)
     compute_fractions!(fractions, x, xcenter, setup)
     fig = Figure()
     ax = Axis(fig[1, 1])
-    heatmap!(ax, setup.xp..., fractions)
-    scatterlines!(ax, map(Point2, x))
-    scatter!(ax, map(Point2, xcenter); color = Cycled(3))
+    cpu = AK.KernelAbstractions.CPU()
+    f = adapt(cpu, fractions)
+    xp = adapt(cpu, setup.xp)
+    heatmap!(ax, xp..., f)
+    scatterlines!(ax, map(Point2, adapt(cpu, x)))
+    scatter!(ax, map(Point2, adapt(cpu, xcenter)); color = Cycled(3))
     return fig
 end
 

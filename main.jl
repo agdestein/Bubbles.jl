@@ -1,4 +1,6 @@
-using Bubbles
+# Load dependencies
+using Bubbles # Bubble source code
+using WGLMakie # Interactive Makie backend
 
 # Illustrate marker masking procedure
 Bubbles.illustrate_masking() |> display
