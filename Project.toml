@@ -1,0 +1,29 @@
+name = "Bubbles"
+uuid = "2a0f4d17-da21-405a-a72d-493c57768bbc"
+version = "1.0.0"
+authors = ["Syver Døving Agdestein <syverda@gmail.com>, Maurik Engelbert van Bevervoorde, Ivo Roghair, and contributors"]
+
+[deps]
+AcceleratedKernels = "6a4ca0a5-0e36-4168-a932-d9be78d558f1"
+Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+CUDSS = "45b445bb-4962-46a0-9369-b4df9d0f772e"
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+IncompressibleNavierStokes = "5e318141-6589-402b-868d-77d7df8c442e"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+WGLMakie = "276b4fcb-3e11-5398-bf8b-a0c2d153d008"
+
+[compat]
+AcceleratedKernels = "0.4"
+Adapt = "4"
+CUDA = "5"
+CUDSS = "0.6"
+CairoMakie = "0.15"
+IncompressibleNavierStokes = "4"
+LinearAlgebra = "1"
+Printf = "1"
+StaticArrays = "1"
+WGLMakie = "0.13"
+julia = "1.10"
