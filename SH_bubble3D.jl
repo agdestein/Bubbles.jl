@@ -16,7 +16,8 @@ To be implemented:
 
 using SphericalHarmonics, SphericalHarmonicModes
 using DelimitedFiles
-using Makie, GLMakie
+using Makie, WGLMakie
+
 
 function cart2spc(x, y, z)
     r = sqrt.(x.^2 + y.^2 + z.^2)
@@ -31,7 +32,7 @@ function spc2cart(r, ϕ, θ)
 end
 
 function get_points_spc(npoints)
-    points = readdlm("cub/sd$(npoints).txt")
+    points = readdlm("src/cub/sd$(npoints).txt")
     x, y, z = points[:,1], points[:,2], points[:,3]
     return cart2spc(x, y, z)
 end
