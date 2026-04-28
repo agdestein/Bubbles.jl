@@ -56,7 +56,6 @@ function get_SH_der(ℓₘ, ϕ, θ)
     modes = ML(0:ℓₘ)                # (ℓ, m) tuples
     ℓs = first.(modes)              # ℓ values, in storage order
     ms = last.(modes)               # m values, in storage order
-    # ms_nonneg = last.(ML(0:ℓₘ, 0:ℓₘ))   # only nonnegative m values, in storage order
     pos = findall(m -> m > 0, ms); neg = findall(m -> m < 0, ms); zero = findall(m -> m == 0, ms)
     one = findall(m -> m == 1, ms); mone = findall(m -> m == -1, ms)
     nonneg = findall(m -> m >= 0, ms); ms_nonneg = ms[nonneg]
@@ -103,6 +102,84 @@ function get_SH_der(ℓₘ, ϕ, θ)
     dY_dθ = - ms' .* Y[:, m_flip]
 
     return Y, dY_dϕ, dY_dθ, ℓs, ms, one, mone
+end
+
+function get_SH_der2(ℓₘ, ϕ, θ)
+    nbf = (ℓₘ + 1)^2  # number of basis functions (spherical harmonics)
+
+    modes = ML(0:ℓₘ)                # (ℓ, m) tuples
+    ℓs = first.(modes)              # ℓ values, in storage order
+    ms = last.(modes)               # m values, in storage order
+    pos = findall(m -> m > 0, ms); neg = findall(m -> m < 0, ms); zero = findall(m -> m == 0, ms)
+    one = findall(m -> m == 1, ms); mone = findall(m -> m == -1, ms)
+    nonneg = findall(m -> m >= 0, ms); ms_nonneg = ms[nonneg]
+    nonneg_pos = findall(m -> m > 0, ms_nonneg); nonneg_zero = findall(m -> m == 0, ms_nonneg)
+
+    nonneg_neg = zeros(Int, (ℓₘ^2 + ℓₘ) ÷ 2)    # correct order for negative m (most negative first)
+    m_flip = zeros(Int, length(ms))             # points to -m at position of m, for dY_dθ
+    m_flip[1] = 1
+    let i = 1; j = 2
+        for ℓ in 1:ℓₘ 
+            nonneg_neg[i:i + ℓ - 1] .= i + ℓ + ℓ : -1 : i + ℓ + 1
+            m_flip[j:j + 2 * ℓ] .= j + 2 * ℓ : -1 : j
+            i = i + ℓ
+            j = j + 2 * ℓ + 1
+        end
+    end
+
+    Ytemp = SphericalHarmonics.computeYlm.(ϕ, θ, lmax = ℓₘ, 
+                                        SHType = SphericalHarmonics.RealHarmonics())
+    Ptemp = SphericalHarmonics.computePlmcostheta.(ϕ, ℓₘ)   # only nonnegative m by default
+
+    Y = zeros(Float64, length(ϕ), nbf) # convert to matrix
+    P = zeros(Float64, length(ϕ), length(ms_nonneg))
+
+    for i = 1:length(ϕ)
+        Y[i, :] .= Ytemp[i][:]
+        P[i, :] .= Ptemp[i][:]
+    end
+
+    Ytemp = 0; Ptemp = 0    # free
+
+    dY_dϕ = zeros(Float64, length(ϕ), nbf)
+    dY_dϕ[:, zero] .= sqrt.(ℓs[zero] .* (ℓs[zero] .+ 1) / 2.)' .* P[:, nonneg_zero .+ 1]
+    Y_ϕ_neg = (
+            sqrt.((ℓs[neg] .- abs.(ms[neg])) .* (ℓs[neg] .+ abs.(ms[neg]) .+ 1))' .* P[:, clamp.(nonneg_neg .+ 1, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)] .* (ℓs[neg] .!= abs.(ms[neg]))'
+            - sqrt.((ℓs[neg] .+ abs.(ms[neg])) .* (ℓs[neg] .- abs.(ms[neg]) .+ 1))' .* P[:, nonneg_neg .- 1]
+        ) / 2.
+    Y_ϕ_pos = (
+            sqrt.((ℓs[pos] - ms[pos]) .* (ℓs[pos] + ms[pos] .+ 1))' .* P[:, clamp.(nonneg_pos .+ 1, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)] .* (ℓs[pos] .!= ms[pos])'
+            - sqrt.((ℓs[pos] + ms[pos]) .* (ℓs[pos] - ms[pos] .+ 1))' .* P[:, nonneg_pos .- 1]
+        ) / 2.
+    dY_dϕ[:, neg] .= sin.(abs.(ms[neg])' .* θ[:, :]) .* Y_ϕ_neg
+    dY_dϕ[:, pos] .= cos.(ms[pos]' .* θ[:, :]) .* Y_ϕ_pos
+
+    dY_dθ = - ms' .* Y[:, m_flip]
+
+    d²Y_dθ² = - ((ms).^2)' .* Y
+
+    d²Y_dθdϕ = zeros(Float64, length(ϕ), nbf)
+    d²Y_dθdϕ[:, neg] .= abs.(ms[neg]) .* cos.(abs.(ms[neg])' .* θ[:, :]) .* Y_ϕ_neg
+    d²Y_dθdϕ[:, pos] .= - ms[pos] .* sin.(ms[pos]' .* θ[:, :]) .* Y_ϕ_pos
+
+    d²Y_dϕ² = zeros(Float64, length(ϕ), nbf)
+    d²Y_dϕ²[:, neg] .= (sqrt.((ℓs[neg] - abs.(ms[neg]) .- 1) .* (ℓs[neg] - abs.(ms[neg])) .* (ℓs[neg] + abs.(ms[neg]) .+ 1) .* (ℓs[neg] + abs.(ms[neg]) .+ 2))' .* 
+                        P[:, clamp.(nonneg_neg .+ 2, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)] .* (abs.(ms[neg]) .+ 2 .≤ ℓs[neg])'
+                        - 2. * ((ℓs[neg] + abs.(ms[neg])) .* (ℓs[neg] - abs.(ms[neg])) .* (ℓs[neg] + abs.(ms[neg]) .+ 1) .* (ℓs[neg] - abs.(ms[neg]) .+ 1))' .* P 
+                        + sqrt.((ℓs[neg] + abs.(ms[neg]) .- 1) .* (ℓs[neg] + abs.(ms[neg])) .* (ℓs[neg] - abs.(ms[neg]) .+ 1) .* (ℓs[neg] - abs.(ms[neg]) .+ 2))' .*
+                        P[:, clamp.(nonneg_neg .- 2, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)] .* (abs.(ms[neg]) .!= 1)'
+        ) / 4. .* sin.(abs.(ms[neg])' .* θ[:, :])
+    d²Y_dϕ²[:, zero] .= (sqrt.((ℓs[zero] .+ 2) .* (ℓs[zero] .+ 1) .* ℓs[zero] .* (ℓs[zero] .- 1))' .* P[:, nonneg_zero .+ 2]
+                        - (ℓs[zero] .* (ℓs[zero] .+ 1))' .* P[:, nonneg_zero]
+        ) / (2. * sqrt(2.))
+    d²Y_dϕ²[:, pos] .= (sqrt.((ℓs[pos] - ms[pos] .- 1) .* (ℓs[pos] - ms[pos]) .* (ℓs[pos] + ms[pos] .+ 1) .* (ℓs[pos] + ms[pos] .+ 2))' .* 
+                        P[:, clamp.(nonneg_pos .+ 2, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)] .* (ms[pos] .+ 2 .≤ ℓs[pos])'
+                        - 2. * ((ℓs[pos] + ms[pos]) .* (ℓs[pos] - ms[pos]) .* (ℓs[pos] + ms[pos] .+ 1) .* (ℓs[pos] - ms[pos] .+ 1))' .* P 
+                        + sqrt.((ℓs[pos] + ms[pos] .- 1) .* (ℓs[pos] + ms[pos]) .* (ℓs[pos] - ms[pos] .+ 1) .* (ℓs[pos] - ms[pos] .+ 2))' .*
+                        P[:, clamp.(nonneg_pos .- 2, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)] .* (ms[pos] .!= 1)'
+        ) / 4. .* cos.(ms[pos]' .* θ[:, :])
+
+    return Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone
 end
 
 function K_lone(ℓ)

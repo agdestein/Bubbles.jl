@@ -1,5 +1,5 @@
-# using Makie, CairoMakie
-using Makie, GLMakie
+using Makie, CairoMakie
+# using Makie, GLMakie
 include("../src/SH.jl")    # import source code
 
 function get_uz_spc(c, Y, ϕ, θ)
@@ -87,7 +87,7 @@ function test_z_translation(c, centr, ℓₘ, npoints, V, dt, nt)
 
     Vs = zeros(Float64, nt)
 
-    println("#cubature points: $(length(ϕ)), #testing points: $(length(ϕ_test)), #basis functions: $(nbf), dt: $(dt)")
+    println("#cubature points: $(length(ϕ)), #testing points: $(length(ϕ_test)), #basis functions: $(nbf), dt: $(dt), #t: $(nt)")
 
     for i in 1:nt   # RK4 time stepping
         k1, k1_centr = time_step(c, Y, dY_dϕ, dY_dθ, ϕ, θ, 
@@ -138,7 +138,7 @@ c0[1] = 1. * sqrt(4. * π)   # we start with a unit sphere: only the first spher
 
 centr0 = zeros(Float64, 3)  # bubble centroid
 
-dt = 1e-2; nt = Int64(round(1/dt)) # time step, nr of time steps
+dt = 1e-3; nt = Int64(round(1/dt)) # time step, nr of time steps
 
 ### Comment/uncomment x vs y test case #############################################################################################################
 # Parabolic velocity profile in z direction:
@@ -153,17 +153,22 @@ x0, y0, z0, x, y, z, Vs, errors_rel, xvis, yvis, zvis = test_z_translation(c0, c
 
 # scatter(x, y, z)
 
-err_max, err_mean, err_min = maximum(errors_rel), sum(errors_rel)/length(errors_rel), minimum(errors_rel)
-println("Max error: $(err_max), mean: $(err_mean), min: $(err_min), relative volume: $(Vs[end]/V)")
+err_max, err_mean, err_min = maximum(abs.(errors_rel)), sum(abs.(errors_rel))/length(errors_rel), minimum(errors_rel)
+println("Max error: $(err_max), min: $(err_min), relative volume: $(Vs[end]/V)")
 println("Max abs error: $(maximum(abs.(errors_rel))), mean: $(sum(abs.(errors_rel))/length(errors_rel))")
 
-fig = Figure()
+set_theme!(Theme(fontsize = 20))
+
+fig = Figure(backgroundcolor = :transparent)
 # ax1 = Axis(fig[1, 1], xlabel = L"$\frac{r_{\text{sim}}-r}{r}$ [-]", ylabel = "Count [-]")
-ax1 = Axis3(fig[1, 1], title = "Max relative error: $(round(err_max, sigdigits=3)), mean: $(round(err_mean, sigdigits=3))")
-ax2 = Axis(fig[2, 1], xlabel = "Time [s]", ylabel = L"$\frac{V_{\text{sim}}}{V}$ [-]")
-# hist!(ax1, errors_rel, bins = 20, strokewidth = 1, strokecolor = :black)
-scatter!(ax1, x, y, z, color=errors_rel)
-lines!(ax2, range(dt, 1, nt), Vs / V)
-# ylims!(ax, 0, maximum(Vs) * 1.1)
+# ax1 = Axis3(fig[1, 1], title = "Max relative abs error: $(round(err_max, sigdigits=3)), mean: $(round(err_mean, sigdigits=3))")
+# ax2 = Axis(fig[2, 1], xlabel = "Time [s]", ylabel = L"$\frac{V_{\text{sim}}-V}{V}$ [-]")
+# scatter!(ax1, x, y, z, color=errors_rel)
+# lines!(ax2, range(dt, 1, nt), Vs / V .- 1)
 # axislegend(ax, position = :rb)
-fig
+# fig
+
+ax = Axis(fig[1,1], xlabel = "Time [s]", ylabel = L"$\frac{V_{\text{sim}}-V}{V}$ [-]", backgroundcolor = :transparent)
+scatterlines!(ax, range(dt, 1, nt), Vs / V .- 1, marker = :circle, linestyle = :dash)
+# display(fig)
+save("Volume_test_dt=$(dt)_ell=$(ℓₘ)_N=$(npoints).png", fig)
