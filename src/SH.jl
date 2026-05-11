@@ -205,7 +205,7 @@ function get_SH_der2(ℓₘ, ϕ, θ)
                         P[:, clamp.(nonneg_pos .- 2, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)] .* (ms[pos] .!= 1)'
         ) / 4.
 
-    return Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero
+    return (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero)
 end
 
 function bubble_setup(ncub, ℓₘ, R)
@@ -220,7 +220,7 @@ function bubble_setup(ncub, ℓₘ, R)
     Bub = (; c, centr, V)
 
     # Precomputed spherical harmonics (derivatives) at spherical design cubature points:
-    Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero = get_SH_der2(ℓₘ, ϕ_fit, θ_fit)
+    (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero) = get_SH_der2(ℓₘ, ϕ_fit, θ_fit)
     Precomp_SH = (; ϕ, θ, Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero)
 
     return Bub, Precomp_SH
