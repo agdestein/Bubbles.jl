@@ -25,7 +25,7 @@ function test_z_rotation(c, centr, ℓₘ, npoints, V, dt, nt)
     r, ϕ, θ = get_points_spc(npoints)
     r_test, ϕ_test, θ_test = get_points_spc(16382)  # for testing only
 
-    Y, dY_dϕ, dY_dθ, ℓs, ms, one, mone = get_SH_der(ℓₘ, ϕ, θ)   # spherical harmonics (and partial derivatives) at cubature points, their identifiers (ℓ, m) and some specific indices (where m==1 and m==-1)
+    Y, dY_dϕ, dY_dθ, ℓs, ms, one, mone, _ = get_SH_der(ℓₘ, ϕ, θ)   # spherical harmonics (and partial derivatives) at cubature points, their identifiers (ℓ, m) and some specific indices (where m==1 and m==-1)
     Y_test = get_SH(ℓₘ, ϕ_test, θ_test)                         # spherical harmonics at test points
 
     x0, y0, z0 = spc2cart(r_test, ϕ_test, θ_test)
@@ -79,7 +79,7 @@ function test_z_translation(c, centr, ℓₘ, npoints, V, dt, nt)
     r, ϕ, θ = get_points_spc(npoints)
     r_test, ϕ_test, θ_test = get_points_spc(16382)  # for testing only
 
-    Y, dY_dϕ, dY_dθ, ℓs, ms, one, mone = get_SH_der(ℓₘ, ϕ, θ)   # spherical harmonics (and partial derivatives) at cubature points, their identifiers (ℓ, m) and some specific indices (where m==1 and m==-1)
+    Y, dY_dϕ, dY_dθ, ℓs, ms, one, mone, _ = get_SH_der(ℓₘ, ϕ, θ)   # spherical harmonics (and partial derivatives) at cubature points, their identifiers (ℓ, m) and some specific indices (where m==1 and m==-1)
     Y_test = get_SH(ℓₘ, ϕ_test, θ_test)                         # spherical harmonics at test points
 
     x0, y0, z0 = spc2cart(r_test, ϕ_test, θ_test)
@@ -158,8 +158,8 @@ println("Max error: $(err_max), min: $(err_min), relative volume: $(Vs[end]/V)")
 println("Max abs error: $(maximum(abs.(errors_rel))), mean: $(sum(abs.(errors_rel))/length(errors_rel))")
 
 set_theme!(Theme(fontsize = 20))
-
-fig = Figure(backgroundcolor = :transparent)
+fig = Figure()
+# fig = Figure(backgroundcolor = :transparent)
 # ax1 = Axis(fig[1, 1], xlabel = L"$\frac{r_{\text{sim}}-r}{r}$ [-]", ylabel = "Count [-]")
 # ax1 = Axis3(fig[1, 1], title = "Max relative abs error: $(round(err_max, sigdigits=3)), mean: $(round(err_mean, sigdigits=3))")
 # ax2 = Axis(fig[2, 1], xlabel = "Time [s]", ylabel = L"$\frac{V_{\text{sim}}-V}{V}$ [-]")
@@ -168,7 +168,8 @@ fig = Figure(backgroundcolor = :transparent)
 # axislegend(ax, position = :rb)
 # fig
 
-ax = Axis(fig[1,1], xlabel = "Time [s]", ylabel = L"$\frac{V_{\text{sim}}-V}{V}$ [-]", backgroundcolor = :transparent)
+ax = Axis(fig[1,1], xlabel = "Time [s]", ylabel = L"$\frac{V_{\text{sim}}-V}{V}$ [-]")
+# ax = Axis(fig[1,1], xlabel = "Time [s]", ylabel = L"$\frac{V_{\text{sim}}-V}{V}$ [-]", backgroundcolor = :transparent)
 scatterlines!(ax, range(dt, 1, nt), Vs / V .- 1, marker = :circle, linestyle = :dash)
-# display(fig)
-save("Volume_test_dt=$(dt)_ell=$(ℓₘ)_N=$(npoints).png", fig)
+display(fig)
+# save("Volume_test_dt=$(dt)_ell=$(ℓₘ)_N=$(npoints).png", fig)

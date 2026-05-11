@@ -18,6 +18,9 @@ using SphericalHarmonics, SphericalHarmonicModes
 using DelimitedFiles
 
 function cart2spc(x, y, z)
+    """
+    Convert Cartesian coordinates (x, y, z) to spherical (r, ϕ, θ).
+    """
     r = sqrt.(x.^2 + y.^2 + z.^2)
     ϕ = acos.(z ./ r)
     θ = atan.(y, x)
@@ -25,17 +28,27 @@ function cart2spc(x, y, z)
 end
 
 function spc2cart(r, ϕ, θ)
+    """
+    Convert spherical coordinates (r, ϕ, θ) to Cartesian (x, y, z).
+    """
     x, y, z = r .* sin.(ϕ) .* cos.(θ), r .* sin.(ϕ) .* sin.(θ), r .* cos.(ϕ)
     return x, y, z
 end
 
 function get_points_spc(npoints)
+    """
+    Get spherical design cubature point set of cardinality 'npoints', where 'npoints' ∈ {50, 201, 513, 1059, 2049, 4051, 8066, 16382}.
+    Return the points in spherical coordinates (r, ϕ, θ).
+    """
     points = readdlm("src/cub/sd$(npoints).txt")
     x, y, z = points[:,1], points[:,2], points[:,3]
     return cart2spc(x, y, z)
 end
 
 function get_SH(ℓₘ, ϕ, θ)
+    """
+    Evaluate all spherical harmonics up to and including order ℓₘ at spherical design cubature points (ϕ, θ). 
+    """
     nbf = (ℓₘ + 1)^2  # number of basis functions (spherical harmonics)
 
     Ytemp = SphericalHarmonics.computeYlm.(ϕ, θ, lmax = ℓₘ, 
@@ -51,6 +64,10 @@ function get_SH(ℓₘ, ϕ, θ)
 end
 
 function get_SH_der(ℓₘ, ϕ, θ)
+    """
+    Evaluate all spherical harmonics up to and including order ℓₘ at spherical design cubature points (ϕ, θ). 
+    Also evaluates first order partial derivatives of the spherical harmonics.
+    """
     nbf = (ℓₘ + 1)^2  # number of basis functions (spherical harmonics)
 
     modes = ML(0:ℓₘ)                # (ℓ, m) tuples
@@ -101,10 +118,14 @@ function get_SH_der(ℓₘ, ϕ, θ)
 
     dY_dθ = - ms' .* Y[:, m_flip]
 
-    return Y, dY_dϕ, dY_dθ, ℓs, ms, one, mone
+    return Y, dY_dϕ, dY_dθ, ℓs, ms, one, mone, zero
 end
 
 function get_SH_der2(ℓₘ, ϕ, θ)
+    """
+    Evaluate all spherical harmonics up to and including order ℓₘ at spherical design cubature points (ϕ, θ). 
+    Also evaluates first and second order partial derivatives of the spherical harmonics.
+    """
     nbf = (ℓₘ + 1)^2  # number of basis functions (spherical harmonics)
 
     modes = ML(0:ℓₘ)                # (ℓ, m) tuples
@@ -142,7 +163,7 @@ function get_SH_der2(ℓₘ, ϕ, θ)
     Ytemp = 0; Ptemp = 0    # free
 
     dY_dϕ = zeros(Float64, length(ϕ), nbf)
-    dY_dϕ[:, zero] .= sqrt.(ℓs[zero] .* (ℓs[zero] .+ 1) / 2.)' .* P[:, nonneg_zero .+ 1]
+    dY_dϕ[:, zero] .= sqrt.(ℓs[zero] .* (ℓs[zero] .+ 1) / 2.)' .* P[:, clamp.(nonneg_zero .+ 1, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)]
     Y_ϕ_neg = (
             sqrt.((ℓs[neg] .- abs.(ms[neg])) .* (ℓs[neg] .+ abs.(ms[neg]) .+ 1))' .* P[:, clamp.(nonneg_neg .+ 1, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)] .* (ℓs[neg] .!= abs.(ms[neg]))'
             - sqrt.((ℓs[neg] .+ abs.(ms[neg])) .* (ℓs[neg] .- abs.(ms[neg]) .+ 1))' .* P[:, nonneg_neg .- 1]
@@ -159,30 +180,47 @@ function get_SH_der2(ℓₘ, ϕ, θ)
     d²Y_dθ² = - ((ms).^2)' .* Y
 
     d²Y_dθdϕ = zeros(Float64, length(ϕ), nbf)
-    d²Y_dθdϕ[:, neg] .= abs.(ms[neg]) .* cos.(abs.(ms[neg])' .* θ[:, :]) .* Y_ϕ_neg
-    d²Y_dθdϕ[:, pos] .= - ms[pos] .* sin.(ms[pos]' .* θ[:, :]) .* Y_ϕ_pos
+    d²Y_dθdϕ[:, neg] .= abs.(ms[neg])' .* cos.(abs.(ms[neg])' .* θ[:, :]) .* Y_ϕ_neg
+    d²Y_dθdϕ[:, pos] .= - ms[pos]' .* sin.(ms[pos]' .* θ[:, :]) .* Y_ϕ_pos
 
     d²Y_dϕ² = zeros(Float64, length(ϕ), nbf)
-    d²Y_dϕ²[:, neg] .= (sqrt.((ℓs[neg] - abs.(ms[neg]) .- 1) .* (ℓs[neg] - abs.(ms[neg])) .* (ℓs[neg] + abs.(ms[neg]) .+ 1) .* (ℓs[neg] + abs.(ms[neg]) .+ 2))' .* 
+    d²Y_dϕ²[:, neg] .= sin.(abs.(ms[neg])' .* θ[:, :]) .* (sqrt.((ℓs[neg] - abs.(ms[neg]) .- 1) .* (ℓs[neg] - abs.(ms[neg])) .* (ℓs[neg] + abs.(ms[neg]) .+ 1) .* (ℓs[neg] + abs.(ms[neg]) .+ 2))' .* 
                         P[:, clamp.(nonneg_neg .+ 2, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)] .* (abs.(ms[neg]) .+ 2 .≤ ℓs[neg])'
-                        - 2. * ((ℓs[neg] + abs.(ms[neg])) .* (ℓs[neg] - abs.(ms[neg])) .* (ℓs[neg] + abs.(ms[neg]) .+ 1) .* (ℓs[neg] - abs.(ms[neg]) .+ 1))' .* P 
+                        - 2. * ((ℓs[neg] + abs.(ms[neg])) .* (ℓs[neg] - abs.(ms[neg])) + ℓs[neg])' .* P[:, nonneg_neg]
+                        - ((ℓs[neg] + abs.(ms[neg])) .* (ℓs[neg] - abs.(ms[neg]) .+ 1))' .* P[:, nonneg_neg] .* (abs.(ms[neg]) .== 1)'
                         + sqrt.((ℓs[neg] + abs.(ms[neg]) .- 1) .* (ℓs[neg] + abs.(ms[neg])) .* (ℓs[neg] - abs.(ms[neg]) .+ 1) .* (ℓs[neg] - abs.(ms[neg]) .+ 2))' .*
                         P[:, clamp.(nonneg_neg .- 2, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)] .* (abs.(ms[neg]) .!= 1)'
-        ) / 4. .* sin.(abs.(ms[neg])' .* θ[:, :])
-    d²Y_dϕ²[:, zero] .= (sqrt.((ℓs[zero] .+ 2) .* (ℓs[zero] .+ 1) .* ℓs[zero] .* (ℓs[zero] .- 1))' .* P[:, nonneg_zero .+ 2]
+        ) / 4.
+    d²Y_dϕ²[:, zero] .= (sqrt.((ℓs[zero] .+ 2) .* (ℓs[zero] .+ 1) .* ℓs[zero] .* (ℓs[zero] .- 1))' .* P[:, clamp.(nonneg_zero .+ 2, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)]
                         - (ℓs[zero] .* (ℓs[zero] .+ 1))' .* P[:, nonneg_zero]
         ) / (2. * sqrt(2.))
-    d²Y_dϕ²[:, pos] .= (sqrt.((ℓs[pos] - ms[pos] .- 1) .* (ℓs[pos] - ms[pos]) .* (ℓs[pos] + ms[pos] .+ 1) .* (ℓs[pos] + ms[pos] .+ 2))' .* 
+    d²Y_dϕ²[:, pos] .= cos.(ms[pos]' .* θ[:, :]) .* (sqrt.((ℓs[pos] - ms[pos] .- 1) .* (ℓs[pos] - ms[pos]) .* (ℓs[pos] + ms[pos] .+ 1) .* (ℓs[pos] + ms[pos] .+ 2))' .* 
                         P[:, clamp.(nonneg_pos .+ 2, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)] .* (ms[pos] .+ 2 .≤ ℓs[pos])'
-                        - 2. * ((ℓs[pos] + ms[pos]) .* (ℓs[pos] - ms[pos]) .* (ℓs[pos] + ms[pos] .+ 1) .* (ℓs[pos] - ms[pos] .+ 1))' .* P 
+                        - 2. * ((ℓs[pos] + ms[pos]) .* (ℓs[pos] - ms[pos]) + ℓs[pos])' .* P[:, nonneg_pos] 
+                        - ((ℓs[pos] + ms[pos]) .* (ℓs[pos] - ms[pos] .+ 1))' .* P[:, nonneg_pos] .* (ms[pos] .== 1)'
                         + sqrt.((ℓs[pos] + ms[pos] .- 1) .* (ℓs[pos] + ms[pos]) .* (ℓs[pos] - ms[pos] .+ 1) .* (ℓs[pos] - ms[pos] .+ 2))' .*
                         P[:, clamp.(nonneg_pos .- 2, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)] .* (ms[pos] .!= 1)'
-        ) / 4. .* cos.(ms[pos]' .* θ[:, :])
+        ) / 4.
 
-    return Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone
+    return Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero
+end
+
+function fit_coefs_LS(Y, r)
+    c = Y \ r
+    return c
+end
+
+function K_lzero(ℓ)
+    """
+    Evaluate spherical harmonic normalization constant for all degrees ℓ at order m=0.
+    """
+    return sqrt.((2. * ℓ .+ 1)/(4. * π))
 end
 
 function K_lone(ℓ)
+    """
+    Evaluate spherical harmonic normalization constant for all degrees ℓ at order m=1.
+    """
     return sqrt.((2. * ℓ .+ 1)/(4. * π) ./ (ℓ .* (ℓ .+ 1)))
 end
 
@@ -191,10 +229,162 @@ end
 # end
 
 function volume(c, Y)
+    """
+    Compute total bubble volume.
+    """
     r = Y * c 
     return 4. * π / length(r) * sum(r .^ 3) / 3.
 end
 
+function northpole(c, ℓs, one, mone, zero, θ)
+    """
+    Evaluate relevant limits at singularities at the north pole (first spherical design cubature point: ϕ = θ = 0).
+    """
+    dr_dθ_div_sinϕ = sum(K_lone.(ℓs[one]) .* ℓs[one] .* (ℓs[one] .+ 1) / 2. .* c[one] * sin(θ[1]) - 
+                        K_lone.(ℓs[mone]) .* ℓs[mone] .* (ℓs[mone] .+ 1) / 2. .* c[mone] * cos(θ[1]))
+    # d²r_dθ²_div_sinϕ = sum(K_lone.(ℓs[one]) .* ℓs[one] .* (ℓs[one] .+ 1) / 2. .* c[one] * cos(θ[1]) +
+    #                     K_lone.(ℓs[mone]) .* ℓs[mone] .* (ℓs[mone] .+ 1) / 2. .* c[mone] * sin(θ[1]))
+    EN_lim = - sum(c[zero] .* K_lzero(ℓs[zero]) .* ℓs[zero] .* (ℓs[zero] .+ 1) / 2.)
+    
+    return dr_dθ_div_sinϕ, EN_lim
+end
+
+function unit_normal(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, ϕ)
+    """
+    Evaluate outwards facing unit normal at spherical design cubature points.
+    """
+    n_length = zeros(Float64, length(ϕ))
+    n_length[2:end] .= sqrt.(r[2:end] .^ 2 + dr_dϕ[2:end] .^ 2 + (dr_dθ[2:end] ./ sin.(ϕ[2:end])) .^2)
+    n_length[1] = sqrt(r[1] ^ 2 + dr_dϕ[1] ^ 2 + dr_dθ_div_sinϕ ^ 2) 
+    n_r = r ./ n_length
+    n_ϕ = dr_dϕ ./ n_length 
+    n_θ = zeros(Float64, length(ϕ))
+    n_θ[2:end] .= dr_dθ[2:end] ./ sin.(ϕ[2:end]) ./ n_length[2:end]
+    n_θ[1] = dr_dθ_div_sinϕ / n_length[1]
+    # println("length: $(n_length[1]), div: $(dr_dθ_div_sinϕ), n_θ: $(n_θ[1])")
+
+    return n_r, n_ϕ, n_θ
+end
+
+function surface_element(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, ϕ)
+    """
+    Evaluate differential surface element divided by sin(ϕ) at spherical design cubature points.
+    """
+    dS = zeros(Float64, length(ϕ))
+    dS[2:end] .= r[2:end] .* sqrt.(r[2:end] .^ 2 + dr_dϕ[2:end] .^ 2 + (dr_dθ[2:end] ./ sin.(ϕ[2:end])) .^ 2)
+    dS[1] = r[1] * sqrt(r[1] ^ 2 + dr_dϕ[1] ^ 2 + dr_dθ_div_sinϕ ^ 2)
+
+    return dS
+end
+
+function surface_area(dS, ϕ)
+    """
+    Compute total bubble surface area.
+    """
+    S = 4. * π / length(ϕ) * sum(dS)
+    return S 
+end
+
+function surface_curvature(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², EN_lim, ϕ, dS)
+    """
+    Evaluate twice the local mean curvature (2H = κ) at spherical design cubature points.
+    """
+    # All divided by sin²ϕ (both denominator and numerator):
+    EN = zeros(Float64, length(ϕ)); GL = similar(EN); FM = similar(EN)
+    EN[2:end] .= (dr_dϕ[2:end] .^ 2 + r[2:end] .^ 2) .* (r[2:end] .* d²r_dθ²[2:end] ./ (sin.(ϕ[2:end]) .^ 2) + 
+                                                        r[2:end] .* dr_dϕ[2:end] .* cos.(ϕ[2:end]) ./ sin.(ϕ[2:end]) - 
+                                                        2. * (dr_dθ[2:end] ./ sin.(ϕ[2:end])) .^ 2 - 
+                                                        r[2:end] .^ 2)
+    EN[1] = (dr_dϕ[1] ^ 2 + r[1] ^ 2) * (r[1] * EN_lim - 2. * dr_dθ_div_sinϕ ^ 2 - r[1] ^ 2)
+    GL[2:end] .= ((dr_dθ[2:end] ./ sin.(ϕ[2:end])) .^ 2 + r[2:end] .^ 2) .* (r[2:end] .* d²r_dϕ²[2:end] -
+                                                                            2. * dr_dϕ[2:end] .^ 2 - 
+                                                                            r[2:end] .^ 2)
+    GL[1] = (dr_dθ_div_sinϕ ^ 2 + r[1] ^ 2) * (r[1] * d²r_dϕ²[1] - 2. * dr_dϕ[1] ^ 2 - r[1] ^ 2)
+    FM[2:end] .= dr_dϕ[2:end] .* dr_dθ[2:end] ./ sin.(ϕ[2:end]) .* (-2. * dr_dϕ[2:end] .* dr_dθ[2:end] ./ sin.(ϕ[2:end]) + 
+                                                                    r[2:end] .* d²r_dϕdθ[2:end] ./ sin.(ϕ[2:end]) -
+                                                                    r[2:end] .* dr_dθ[2:end] .* cos.(ϕ[2:end]) ./ (sin.(ϕ[2:end]) .^ 2))
+    FM[1] = dr_dϕ[1] * dr_dθ_div_sinϕ * (-2. * dr_dϕ[1] * dr_dθ_div_sinϕ + 0.)
+
+    κ = ((EN + GL - 2. * FM) ./ dS .* r) ./ (dS .^ 2)
+
+    return κ
+end
+
+function compute_p_drop(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², EN_lim, ϕ, σ)
+    """
+    Compute the total pressure drop over a bubble, parametrized using spherical harmonics.
+    """
+    # E = dr_dϕ .^ 2 + r .^ 2
+    # F_div_sinϕ = zeros(Float64, length(ϕ)) 
+    # F_div_sinϕ[2:end] .= dr_dϕ[2:end] .* dr_dθ[2:end] ./ sin.(ϕ[2:end])
+    # F_div_sinϕ[1] = dr_dϕ[1] * dr_dθ_div_sinϕ
+    # G_div_sinϕ = zeros(Float64, length(ϕ))  # first element is zero (at ϕ=0)
+    # G_div_sinϕ[2:end] .= dr_dθ[2:end] .^ 2 ./ sin.(ϕ[2:end]) + r[2:end] .^ 2 .* sin.(ϕ[2:end])
+    # L = (d²r_dϕ² - r) .* n_r + 2. * dr_dϕ .* n_ϕ
+    # M = d²r_dϕdθ .* n_r + dr_dθ .* n_ϕ + (r .* cos.(ϕ) + dr_dϕ .* sin.(ϕ)) .* n_θ
+    # N_div_sinϕ = zeros(Float64, length(ϕ))
+    # N_div_sinϕ[2:end] .= ((d²r_dθ²[2:end] ./ sin.(ϕ[2:end]) - r[2:end] .* sin.(ϕ[2:end])) .* n_r[2:end] 
+    #                         - r[2:end] .* cos.(ϕ[2:end]) .* n_ϕ[2:end]
+    #                         + 2. * dr_dθ[2:end] .* n_θ[2:end])
+    # N_div_sinϕ[1] = (d²r_dθ²_div_sinϕ - r[1] * sin(ϕ[1])) * n_r[1] - r[1] * cos(ϕ[1]) * n_ϕ[1] + 2. * dr_dθ[1] * n_θ[1]
+
+    # Divided by sinϕ:
+    dS = surface_element(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, ϕ)
+
+    S = surface_area(dS, ϕ)
+
+    κ = surface_curvature(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², EN_lim, ϕ, dS)
+
+    # println("Mean |FM|: $(sum(abs.(FM))/length(FM)), max: $(maximum(abs.(FM)))")
+
+    p_drop = 4. * π / length(ϕ) * σ / S * sum(κ .* dS)
+
+    return p_drop, κ, S
+end
+
+function ellipsoid(axis1, axis2, axis3, npoints, σ)
+    """
+    Compute the total surface area, the local surface curvature, and the total pressure drop over the bubble surface 
+    for a perfectly ellipsoidal bubble, with half-axes 'axis1', 'axis2', 'axis3'.
+    """
+    # max_ax = max(axis1, max(axis2, axis3))
+    # a1, a2, a3 = axis1 / max_ax, axis2 / max_ax, axis3 / max_ax     # normalize
+    a1, a2, a3 = axis1, axis2, axis3
+    _, ϕ, θ = get_points_spc(npoints)
+    r = sqrt.(1. ./ (sin.(ϕ) .^ 2 .* cos.(θ) .^ 2 / (a1 ^ 2) + sin.(ϕ) .^ 2 .* sin.(θ) .^ 2 / (a2 ^ 2) + cos.(ϕ) .^ 2 / (a3 ^ 2)))
+
+    E = a1 ^ 2 * cos.(ϕ) .^ 2 .* cos.(θ) .^ 2 + a2 ^ 2 * cos.(ϕ) .^ 2 .* sin.(θ) .^ 2 + a3 ^ 2 * sin.(ϕ) .^ 2
+    F = (a2 ^ 2 - a1 ^ 2) * sin.(ϕ) .* cos.(ϕ) .* sin.(θ) .* cos.(θ) 
+    G = sin.(ϕ) .^ 2 .* (a1 ^ 2 * sin.(θ) .^ 2 + a2 ^ 2 * cos.(θ) .^ 2)
+    n_length = sqrt.(a1 ^ 2 * a2 ^ 2 * cos.(ϕ) .^ 2 + a3 ^ 2 * sin.(ϕ) .^ 2 .* (a1 ^ 2 * sin.(θ) .^ 2 + a2 ^ 2 * cos.(θ) .^ 2))
+    L = - a1 * a2 * a3 ./ n_length
+    N = - a1 * a2 * a3 * sin.(ϕ) .^ 2 ./ n_length    # M ≡ 0
+    
+    G_div_sin²ϕ = a1 ^ 2 * sin.(θ) .^ 2 + a2 ^ 2 * cos.(θ) .^ 2
+    N_div_sin²ϕ = - a1 * a2 * a3 ./ n_length
+    denom = a1 ^ 2 * a2 ^ 2 * cos.(ϕ) .^ 2 + a3 ^ 2 * sin.(ϕ) .^ 2 .* (a1 ^ 2 * sin.(θ) .^ 2 + a2 ^ 2 * cos.(θ) .^ 2)   # (EG - F^2) / sin²ϕ
+    num = E .* N_div_sin²ϕ + G_div_sin²ϕ .* L
+    κ = num ./ denom    # twice the local mean curvature
+
+    # # Divided by sin²ϕ:
+    # EN = - a1 * a2 * a3 ./ n_length .* ((a1^2 * cos.(θ) .^ 2 + a2^2 * sin.(θ) .^ 2) .* cos.(ϕ) .^ 2 + a3^2 * sin.(ϕ) .^ 2)
+    # GL = - a1*a2*a3 ./ n_length .* (a2^2 * cos.(θ) .^ 2 + a1^2 * sin.(θ) .^ 2)     
+
+    # κ2 = (EN + GL) ./ denom
+
+    # κ_ref = a1 * a2 * a3 * ((3. * (a1 ^ 2 + a2 ^ 2) + 2. * a3 ^ 2 .+ (a1 ^ 2 + a2 ^ 2 - 2. * a3 ^ 2) * cos.(2. * ϕ) -
+    #                         2. * (a1 ^ 2 - a2 ^ 2) .* cos.(2. * θ) .* sin.(ϕ) .^ 2) ./ 
+    #                         (4. * (a1 ^ 2 * a2 ^ 2 * cos.(ϕ) .^ 2 + 
+    #                         a3 ^ 2 * sin.(ϕ) .^ 2 .* (a2 ^ 2 * cos.(θ) .^ 2 + a1 ^ 2 * sin.(θ) .^ 2)) .^ (1.5)))
+
+    S = 4. * π / npoints * sum(n_length)
+
+    p_drop = 4. * π * σ / npoints / S * sum(κ .* n_length)
+
+    return r, ϕ, θ, κ, p_drop, S
+end
+
+############## to move (to Prescribed_u.jl)
 function get_ux_spc(c, Y, umax, ux, ϕ, θ)
     r = Y * c 
     u_x = umax[1] * ux(r .* sin.(ϕ) .* sin.(θ))
@@ -205,10 +395,13 @@ function get_ux_cart(umax, ux, y)
     u_x = umax[1] * ux(y)
     return u_x
 end
+###########################################
 
 function time_step(c, Y, dY_dϕ, dY_dθ, ϕ, θ, u, npoints, V, ℓs, ms, one, mone)
     """
-    - u: shape (npoints, 3)
+    Perform one explicit time (sub-)step of a translating and deforming bubble described as a linear combination of spherical harmonics.
+    - u: shape (npoints, 3); velocity field interpolated to spherical design cubature points (ϕ, θ) relative to centroid.
+    Returns update of coefficients 'dc_dt' and of centroid '[u_centr_x, u_centr_y, u_centr_z]'.
     """
     r = Y * c
     dr_dϕ = dY_dϕ * c 
@@ -220,8 +413,9 @@ function time_step(c, Y, dY_dϕ, dY_dθ, ϕ, θ, u, npoints, V, ℓs, ms, one, m
                     r.^2 .* u[:, 3] .* (r .* cos.(ϕ) + dr_dϕ .* sin.(ϕ))
     u_centr[2:end] .= u_centr[2:end] + r[2:end].^2 .* (u[2:end, 1] .* dr_dθ[2:end] .* sin.(θ[2:end]) ./ sin.(ϕ[2:end]) - 
                                                 u[2:end, 2] .* dr_dθ[2:end] .* cos.(θ[2:end]) ./ sin.(ϕ[2:end]))
-    dr_dθ_div_sinϕ = sum(K_lone.(ℓs[one]) .* ℓs[one] .* (ℓs[one] .+ 1) / 2. .* c[one] * sin(θ[1]) - 
+    dr_dθ_div_sinϕ = sqrt(2.) * sum(K_lone.(ℓs[one]) .* ℓs[one] .* (ℓs[one] .+ 1) / 2. .* c[one] * sin(θ[1]) - 
                         K_lone.(ℓs[mone]) .* ℓs[mone] .* (ℓs[mone] .+ 1) / 2. .* c[mone] * cos(θ[1]))
+    println(dr_dθ_div_sinϕ)
     u_centr[1] = u_centr[1] + r[1]^2 * (u[1, 1] * dr_dθ_div_sinϕ * sin(θ[1]) - 
                                         u[1, 2] * dr_dθ_div_sinϕ * cos(θ[1]))
     u_centr_x = 4. * π / npoints / V * sum(u_centr .* sin.(ϕ) .* cos.(θ))
@@ -301,6 +495,7 @@ end
 #     return x0, y0, z0, x, y, z, Vs
 # end
 
+############## to move (to Prescribed_u.jl)
 function linear_x(c, centr, Y, dY_dϕ, dY_dθ, ϕ, θ, u, umax, npoints, V, dt, nt, Y_test, ϕ_test, θ_test, ℓs, ms, one, mone)
     r0 = Y_test * c 
     x0, y0, z0 = spc2cart(r0, ϕ_test, θ_test)
@@ -326,3 +521,4 @@ function linear_x(c, centr, Y, dY_dϕ, dY_dθ, ϕ, θ, u, umax, npoints, V, dt, 
 
     return x0, y0, z0, x, y, z, Vs
 end
+###########################################

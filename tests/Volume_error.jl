@@ -15,7 +15,7 @@ function volume_error(npoints, ℓₘ, dt, z_x)
 
     nt = Int64(round(1/dt)) # time step, nr of time steps
 
-    Y, dY_dϕ, dY_dθ, ℓs, ms, one, mone = get_SH_der(ℓₘ, ϕ, θ)   # spherical harmonics (and partial derivatives) at cubature points, their identifiers (ℓ, m) and some specific indices (where m==1 and m==-1)
+    Y, dY_dϕ, dY_dθ, ℓs, ms, one, mone, _ = get_SH_der(ℓₘ, ϕ, θ)   # spherical harmonics (and partial derivatives) at cubature points, their identifiers (ℓ, m) and some specific indices (where m==1 and m==-1)
     Y_test = get_SH(ℓₘ, ϕ_test, θ_test)
     # Parabolic velocity profile in z direction:
     if z_x
