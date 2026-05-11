@@ -2,6 +2,11 @@ using Makie, CairoMakie
 # using Makie, GLMakie
 include("../src/SH.jl")    # import source code
 
+"""
+Verify accuracy of 1st and 2nd order partial derivatives of spherical harmonics w.r.t. the polar and azimuthal coordinate ϕ and θ, respectively.
+We compare the results against finite differences.
+"""
+
 N = 50
 ℓₘ = 3
 

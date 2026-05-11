@@ -1,6 +1,10 @@
 using Makie, CairoMakie
-# using Makie, GLMakie
 include("../src/SH.jl")    # import source code
+
+"""
+First fits spherical harmonics to an ellipsoidal reference bubble, then computes the pressure drop over the fitted bubble 
+and compare it to the analytical result for verification of the surface curvature implementation.
+"""
 
 function fit_and_p_drop_ellipsoid(a1, a2, a3, ℓₘ, npoints, σ)
     r_fit, ϕ_fit, θ_fit, κ, p_drop_ellipsoid, S_ellipsoid = ellipsoid(a1, a2, a3, npoints, σ)

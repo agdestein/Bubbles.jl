@@ -2,6 +2,11 @@ using Makie, CairoMakie
 # using Makie, GLMakie
 include("../src/SH.jl")    # import source code
 
+"""
+Test case for bubble deformation and translation due to a prescribed velocity field.
+Verifies the time stepping implementation for bubble dynamics, isolated from the background fluid.
+"""
+
 function get_uz_spc(c, Y, ϕ, θ)
     r = Y * c 
     u_z = 1. .- (r .* sin.(ϕ) .* cos.(θ) / 2.).^2    # parabolic velocity profile in the z direction

@@ -6,6 +6,9 @@ Current functionality inludes:
     - Evaluating spherical harmonics and their partial derivatives at given points 
     - Using spherical design cubature rules to efficiently numerically integrate integrals over the unit sphere
     - RK4 time stepping to update the bubble centroid position and shape coefficients
+    - Computation of the total bubble volume and surface area from spherical harmonics 
+    - Evaluation of bubble surface curvature at spherical design cubature points 
+    - Evaluation of total pressure drop over the bubble surface
 
 To be implemented:
     - Computation of surface tension forces at given positions on the bubble surface

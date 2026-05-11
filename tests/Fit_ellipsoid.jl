@@ -2,11 +2,16 @@ using Makie, CairoMakie
 # using Makie, GLMakie
 include("../src/SH.jl")    # import source code
 
+""" 
+Fit spherical harmonics to an ellipsoidal reference bubble, and compute the L_1 and L_infty error between the fitted and true radial coordinates.
+"""
+σ = 0.   # 'ellipsoid' expects a surface tension coefficient
+
 a1, a2, a3 = 3., 2., 1.
 # ℓₘ = 22
 n_fit = 8066
 
-r_test, ϕ_test, θ_test = ellipsoid(a1, a2, a3, 16382)
+r_test, ϕ_test, θ_test, _, _, _ = ellipsoid(a1, a2, a3, 16382, σ)
 # Y_test = get_SH(ℓₘ, ϕ_test, θ_test)
 # x_test, y_test, z_test = spc2cart(r_test, ϕ_test, θ_test)
 
@@ -19,7 +24,7 @@ err_mean = similar(err_max)
 let i = 1;
     # for n_fit = Ns
     for ℓₘ = ℓs
-        r_fit, ϕ_fit, θ_fit = ellipsoid(a1, a2, a3, n_fit)
+        r_fit, ϕ_fit, θ_fit, _, _, _ = ellipsoid(a1, a2, a3, n_fit, σ)
         Y = get_SH(ℓₘ, ϕ_fit, θ_fit)
         c = fit_coefs_LS(Y, r_fit)
 
