@@ -208,6 +208,24 @@ function get_SH_der2(ℓₘ, ϕ, θ)
     return Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero
 end
 
+function bubble_setup(ncub, ℓₘ, R)
+    # Spherical design cubature points:
+    _, ϕ, θ = get_points_spc(ncub)
+
+    # Bubble initialization:
+    c = zeros(Float64, (ℓₘ + 1) ^ 2)    # spherical harmonics coefficients
+    c[0] = R * sqrt(4. * π)
+    centr = zeros(Float64, 3)           # centroid position 
+    V = 4. / 3. * π * R^3               # total bubble volume
+    Bub = (; c, centr, V)
+
+    # Precomputed spherical harmonics (derivatives) at spherical design cubature points:
+    Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero = get_SH_der2(ℓₘ, ϕ_fit, θ_fit)
+    Precomp_SH = (; ϕ, θ, Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero)
+
+    return Bub, Precomp_SH
+end
+
 function fit_coefs_LS(Y, r)
     c = Y \ r
     return c

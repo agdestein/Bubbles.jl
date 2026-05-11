@@ -6,6 +6,9 @@ First fits spherical harmonics to an ellipsoidal reference bubble, then computes
 and compare it to the analytical result for verification of the surface curvature implementation.
 """
 
+Bub = (; c, centroid, V)
+Precomp_SH = (; ϕ, θ, Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero)
+
 function fit_and_p_drop_ellipsoid(a1, a2, a3, ℓₘ, npoints, σ)
     r_fit, ϕ_fit, θ_fit, κ, p_drop_ellipsoid, S_ellipsoid = ellipsoid(a1, a2, a3, npoints, σ)
     Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero = get_SH_der2(ℓₘ, ϕ_fit, θ_fit)
