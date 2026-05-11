@@ -447,7 +447,7 @@ function applygravity!(f, setup)
     (; gravity) = getparams()
     AK.foreachindex(f) do ilin
         II = CartesianIndices(f)[ilin]
-        dim = II.I[3]
+        dim = II.I[3]   # 4 in 3D
         f[II] += gravity[dim]
     end
 end

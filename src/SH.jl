@@ -58,12 +58,16 @@ function get_SH(ℓₘ, ϕ, θ)
                                         SHType = SphericalHarmonics.RealHarmonics())
     Y = zeros(Float64, length(ϕ), nbf) # convert to matrix
 
-    for i = 1:length(ϕ)
-        Y[i, :] .= Ytemp[i][:]
-    end
-    Ytemp = 0   # free
+    if length(size(ϕ)) == 0
+        return Ytemp
+    else
+        for i = 1:length(ϕ)
+            Y[i, :] .= Ytemp[i][:]
+        end
+        Ytemp = 0   # free
 
-    return Y
+        return Y
+    end
 end
 
 """
@@ -208,19 +212,19 @@ function get_SH_der2(ℓₘ, ϕ, θ)
     return (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero)
 end
 
-function bubble_setup(ncub, ℓₘ, R)
+function bubble_setup(ncub, ℓₘ, R, σ)
     # Spherical design cubature points:
     _, ϕ, θ = get_points_spc(ncub)
 
     # Bubble initialization:
     c = zeros(Float64, (ℓₘ + 1) ^ 2)    # spherical harmonics coefficients
-    c[0] = R * sqrt(4. * π)
+    c[1] = R * sqrt(4. * π)
     centr = zeros(Float64, 3)           # centroid position 
     V = 4. / 3. * π * R^3               # total bubble volume
-    Bub = (; c, centr, V)
+    Bub = (; c, centr, V, σ)
 
     # Precomputed spherical harmonics (derivatives) at spherical design cubature points:
-    (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero) = get_SH_der2(ℓₘ, ϕ_fit, θ_fit)
+    (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero) = get_SH_der2(ℓₘ, ϕ, θ)
     Precomp_SH = (; ϕ, θ, Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero)
 
     return Bub, Precomp_SH
@@ -314,7 +318,9 @@ function unit_normal(Precomp_SH, Dynamic_SH)
 
     n_z = r .* cos.(ϕ) + dr_dϕ .* sin.(ϕ)
 
-    n_x, n_y, n_z .= n_x ./ n_length, n_y ./ n_length, n_z ./ n_length
+    n_x .= n_x ./ n_length
+    n_y .= n_y ./ n_length
+    n_z .= n_z ./ n_length
 
     return n_r, n_ϕ, n_θ, n_x, n_y, n_z
 end
@@ -382,7 +388,7 @@ function surface_tension(Precomp_SH, Dynamic_SH, σ)
     # Note: kappa is negative and unit normal points out of bubble, so surface tension points into the bubble
     pre_surf_tension = σ * κ .* (dS * 4. * π / length(Precomp_SH.ϕ))  
 
-    surf_tension = zeros(Float64, (3, length(Precomp_SH.ϕ)))
+    surf_tension = zeros(Float64, (length(Precomp_SH.ϕ), 3))
 
     # Surface tension force in each Cartesian coordinate [N]
     surf_tension[:, 1] .= pre_surf_tension .* n_x
@@ -484,7 +490,7 @@ function time_step(Bub, Precomp_SH, Dynamic_SH, u)
                                                 u[2:end, 2] .* dr_dθ[2:end] .* cos.(θ[2:end]) ./ sin.(ϕ[2:end]))
     dr_dθ_div_sinϕ = sqrt(2.) * sum(K_lone.(ℓs[one]) .* ℓs[one] .* (ℓs[one] .+ 1) / 2. .* c[one] * sin(θ[1]) - 
                         K_lone.(ℓs[mone]) .* ℓs[mone] .* (ℓs[mone] .+ 1) / 2. .* c[mone] * cos(θ[1]))
-    println(dr_dθ_div_sinϕ)
+    # println(dr_dθ_div_sinϕ)
     u_centr[1] = u_centr[1] + r[1]^2 * (u[1, 1] * dr_dθ_div_sinϕ * sin(θ[1]) - 
                                         u[1, 2] * dr_dθ_div_sinϕ * cos(θ[1]))
     u_centr_x = 4. * π / npoints / V * sum(u_centr .* sin.(ϕ) .* cos.(θ))

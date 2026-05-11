@@ -1,8 +1,7 @@
-using Makie, CairoMakie
 import IncompressibleNavierStokes as N
-include("src/SH.jl")    # import source code
+include("src/time_stepping.jl")
 
-n = 16
+n = 8
 ax = N.tanh_grid(0.0, 1.0, n)
 setup = N.Setup(;
     x = (ax, ax, ax),
@@ -15,13 +14,12 @@ setup = N.Setup(;
     ),
 )
 
-ℓₘ = 10
-ncub = 8066
-# a1, a2, a3 = 1e-3, 1e-3, 1e-3   # [m] Initial bubble half-axes (ellipsoid)
-R = 1e-3    # [m] Initial bubble radius (sphere)
-σ = 73e-3 # [N/m]
+psolver = N.default_psolver(setup)
 
+ncub, ℓₘ, R, σ = 8066, 10, 1e-3, 73e-3
 Bub, Precomp_SH = bubble_setup(ncub, ℓₘ, R, σ)
 
-# While time stepping we use:
-Dynamic_SH = Y2r(Bub, Precomp_SH)
+# Velocity field
+u = zeros(n + 2, n + 2, n + 2, 3);
+
+solveandplot(u, Bub, setup, psolver, Precomp_SH)
