@@ -120,4 +120,66 @@ function map_surface_tension!(Fu, setup, surf_tension, r, ϕ, θ)
 
     end
 
+    return nothing
+end
+
+function map_velocity(u, setup, r, ϕ, θ)
+    xcub, ycub, zcub = spc2cart(r, ϕ, θ)
+
+    (; xp) = setup
+    xu = setup.x[1][2:end], setup.x[2][2:end], setup.x[3][2:end]
+
+    ucub = zeros(Float64, (length(xcub), 3))
+
+    for i = eachindex(xcub)
+        x1, x2, x3 = xcub[i], ycub[i], zcub[i]
+
+        ip = 1; while ip < length(xp[1]) && xp[1][ip] < x1; ip += 1; end
+        iu = 1; while iu < length(xu[1]) && xu[1][iu] < x1; iu += 1; end
+        jp = 1; while jp < length(xp[2]) && xp[2][jp] < x2; jp += 1; end
+        ju = 1; while ju < length(xu[2]) && xu[2][ju] < x2; ju += 1; end
+        kp = 1; while kp < length(xp[3]) && xp[3][kp] < x3; kp += 1; end 
+        ku = 1; while ku < length(xu[3]) && xu[3][ku] < x3; ku += 1; end
+
+        # Linear interpolation weights for each dimension and CENTER/EDGE type
+        w1u = (x1 - xu[1][iu - 1]) / (xu[1][iu] - xu[1][iu - 1])
+        w1p = (x1 - xp[1][ip - 1]) / (xp[1][ip] - xp[1][ip - 1])
+        w2u = (x2 - xu[2][ju - 1]) / (xu[2][ju] - xu[2][ju - 1])
+        w2p = (x2 - xp[2][jp - 1]) / (xp[2][jp] - xp[2][jp - 1])
+        w3u = (x3 - xu[3][ku - 1]) / (xu[3][ku] - xu[3][ku - 1])
+        w3p = (x3 - xp[3][kp - 1]) / (xp[3][kp] - xp[3][kp - 1])
+
+        # Compute velocity at marker control point by bilinear interpolation
+        ucub[i, 1] =
+            (1 - w1u) * (1 - w2p) * (1 - w3p) * u[iu - 1, jp - 1, kp - 1, 1] +
+            w1u * (1 - w2p) * (1 - w3p) * u[iu, jp - 1, kp - 1, 1] +
+            (1 - w1u) * w2p * (1 - w3p) * u[iu - 1, jp, kp - 1, 1] +
+            w1u * w2p * (1 - w3p) * u[iu, jp, kp - 1, 1] + 
+            (1 - w1u) * (1 - w2p) * w3p * u[iu - 1, jp - 1, kp, 1] +
+            w1u * (1 - w2p) * w3p * u[iu, jp - 1, kp, 1] +
+            (1 - w1u) * w2p * w3p * [iu - 1, jp, kp, 1] +
+            w1u * w2p * w3p * [iu, jp, kp, 1]
+
+        ucub[i, 2] =
+            (1 - w1p) * (1 - w2u) * (1 - w3p) * u[ip - 1, ju - 1, kp - 1, 2] +
+            w1p * (1 - w2u) * (1 - w3p) * u[ip, ju - 1, kp - 1, 2] +
+            (1 - w1p) * w2u * (1 - w3p) * u[ip - 1, ju, kp - 1, 2] +
+            w1p * w2u * (1 - w3p) * u[ip, ju, kp - 1, 2] + 
+            (1 - w1p) * (1 - w2u) * w3p * u[ip - 1, ju - 1, kp, 1] +
+            w1p * (1 - w2u) * w3p * u[ip, ju - 1, kp, 1] +
+            (1 - w1p) * w2u * w3p * [ip - 1, ju, kp, 1] +
+            w1p * w2u * w3p * [ip, ju, kp, 1]
+
+        ucub[i, 3] = 
+            (1 - w1p) * (1 - w2p) * (1 - w3u) * u[ip - 1, jp - 1, ku - 1, 2] +
+            w1p * (1 - w2p) * (1 - w3u) * u[ip, jp - 1, ku - 1, 2] +
+            (1 - w1p) * w2p * (1 - w3u) * u[ip - 1, jp, ku - 1, 2] +
+            w1p * w2p * (1 - w3u) * u[ip, jp, ku - 1, 2] + 
+            (1 - w1p) * (1 - w2p) * w3u * u[ip - 1, jp - 1, ku, 1] +
+            w1p * (1 - w2p) * w3u * u[ip, jp - 1, ku, 1] +
+            (1 - w1p) * w2p * w3u * [ip - 1, jp, ku, 1] +
+            w1p * w2p * w3u * [ip, jp, ku, 1]
+
+    end
+    return ucub
 end
