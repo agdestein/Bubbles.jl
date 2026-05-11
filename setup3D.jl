@@ -165,20 +165,20 @@ function map_velocity(u, setup, r, ϕ, θ)
             w1p * (1 - w2u) * (1 - w3p) * u[ip, ju - 1, kp - 1, 2] +
             (1 - w1p) * w2u * (1 - w3p) * u[ip - 1, ju, kp - 1, 2] +
             w1p * w2u * (1 - w3p) * u[ip, ju, kp - 1, 2] + 
-            (1 - w1p) * (1 - w2u) * w3p * u[ip - 1, ju - 1, kp, 1] +
-            w1p * (1 - w2u) * w3p * u[ip, ju - 1, kp, 1] +
-            (1 - w1p) * w2u * w3p * [ip - 1, ju, kp, 1] +
-            w1p * w2u * w3p * [ip, ju, kp, 1]
+            (1 - w1p) * (1 - w2u) * w3p * u[ip - 1, ju - 1, kp, 2] +
+            w1p * (1 - w2u) * w3p * u[ip, ju - 1, kp, 2] +
+            (1 - w1p) * w2u * w3p * [ip - 1, ju, kp, 2] +
+            w1p * w2u * w3p * [ip, ju, kp, 2]
 
         ucub[i, 3] = 
-            (1 - w1p) * (1 - w2p) * (1 - w3u) * u[ip - 1, jp - 1, ku - 1, 2] +
-            w1p * (1 - w2p) * (1 - w3u) * u[ip, jp - 1, ku - 1, 2] +
-            (1 - w1p) * w2p * (1 - w3u) * u[ip - 1, jp, ku - 1, 2] +
-            w1p * w2p * (1 - w3u) * u[ip, jp, ku - 1, 2] + 
-            (1 - w1p) * (1 - w2p) * w3u * u[ip - 1, jp - 1, ku, 1] +
-            w1p * (1 - w2p) * w3u * u[ip, jp - 1, ku, 1] +
-            (1 - w1p) * w2p * w3u * [ip - 1, jp, ku, 1] +
-            w1p * w2p * w3u * [ip, jp, ku, 1]
+            (1 - w1p) * (1 - w2p) * (1 - w3u) * u[ip - 1, jp - 1, ku - 1, 3] +
+            w1p * (1 - w2p) * (1 - w3u) * u[ip, jp - 1, ku - 1, 3] +
+            (1 - w1p) * w2p * (1 - w3u) * u[ip - 1, jp, ku - 1, 3] +
+            w1p * w2p * (1 - w3u) * u[ip, jp, ku - 1, 3] + 
+            (1 - w1p) * (1 - w2p) * w3u * u[ip - 1, jp - 1, ku, 3] +
+            w1p * (1 - w2p) * w3u * u[ip, jp - 1, ku, 3] +
+            (1 - w1p) * w2p * w3u * [ip - 1, jp, ku, 3] +
+            w1p * w2p * w3u * [ip, jp, ku, 3]
 
     end
     return ucub
