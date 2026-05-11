@@ -48,3 +48,24 @@ u[I_total] # With total Cartesian index
 setup.xu[dim][1][I[1]]
 setup.xu[dim][2][I[2]]
 setup.xu[dim][3][I[3]]
+
+# Quadrature point
+xquad = 0.8, 0.7, 0.35
+
+# Find indices of staggered points LEFT of quadrature point
+neighbors = map(1:3) do dim
+    xdim = setup.xu[dim][dim] # Vector of staggered points in direction dim
+    i = 1
+    while xdim[i + 1] < xquad[dim] && i < length(xdim)
+        i += 1
+    end
+    return i
+end
+
+# Check that bounding box is correct
+bounds = map(1:3) do dim
+    i = neighbors[dim] # Left
+    xdim = setup.xu[dim][dim]
+    return xdim[i], xdim[i + 1] # Left and right
+end
+xquad
