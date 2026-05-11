@@ -36,31 +36,33 @@ function map_surface_tension!(Fu, setup, surf_tension, r, ϕ, θ)
     xcub, ycub, zcub = spc2cart(r, ϕ, θ)
 
     for i = eachindex(xcub)     # 1:length(xcub)
-        # Find indices of staggered points LEFT of quadrature point
+        # Find indices of pressure volume containing quadrature point
         xquad = xcub[i], ycub[i], zcub[i]
-        neighbors = map(1:3) do dim
+        neighbors = ntuple(3) do dim
             xdim = setup.xu[dim][dim] # Vector of staggered points in direction dim
             i = 1
-            while xdim[i + 1] < xquad[dim] && i < length(xdim)
+            while xdim[i] < xquad[dim] && i < length(xdim)
                 i += 1
             end
             return i
         end
 
         # Find computational cell where 'xquad' resides
-        bounds = map(1:3) do dim
+        bounds = ntuple(3) do dim
             i = neighbors[dim] # Left
             xdim = setup.xu[dim][dim]
-            return xdim[i], xdim[i + 1] # Left and right
+            return xdim[i-1], xdim[i] # Left and right
         end
 
         # Volumetric surface tension force [N/m³]
         Fσ = surf_tension[i, :] / (bounds[1][2] - bounds[1][1]) / (bounds[2][2] - bounds[2][1]) / (bounds[3][2] - bounds[3][1])
         
         # Add to existing force (convection-diffusion etc.)
+        I = CartesianIndex(neighbors)
         for dim = 1:3
-            Fu[neighbors[dim], dim] += Fσ[dim] * (xquad[dim] - bounds[dim][1]) / (bounds[dim][2] - bounds[dim][1])
-            Fu[neighbors[dim]+1, dim] += Fσ[dim] * (bounds[dim][2] - xquad[dim]) / (bounds[dim][2] - bounds[dim][1])
+            @assert I[dim] > 1
+            Fu[left(I, dim, 1), dim] += Fσ[dim] * (xquad[dim] - bounds[dim][1]) / (bounds[dim][2] - bounds[dim][1])
+            Fu[I, dim] += Fσ[dim] * (bounds[dim][2] - xquad[dim]) / (bounds[dim][2] - bounds[dim][1])
         end
 
     end

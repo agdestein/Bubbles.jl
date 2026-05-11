@@ -12,7 +12,7 @@ setup = N.Setup(;
             (N.DirichletBC(), N.DirichletBC()),
         ),
     ),
-)
+);
 
 # Pressure points (cell centered)
 setup.xp[1] # Vector with x1 coordinates of p
@@ -53,11 +53,11 @@ setup.xu[dim][3][I[3]]
 # Quadrature point
 xquad = 0.8, 0.7, 0.35
 
-# Find indices of staggered points LEFT of quadrature point
+# Find indices of pressure volume containing point
 neighbors = map(1:3) do dim
     xdim = setup.xu[dim][dim] # Vector of staggered points in direction dim
     i = 1
-    while xdim[i + 1] < xquad[dim] && i < length(xdim)
+    while xdim[i] < xquad[dim] && i < length(xdim)
         i += 1
     end
     return i
@@ -78,7 +78,7 @@ map(toto, 1:3)
 bounds = map(1:3) do dim
     i = neighbors[dim] # Left
     xdim = setup.xu[dim][dim]
-    return xdim[i], xdim[i + 1] # Left and right
+    return xdim[i-1], xdim[i] # Left and right
 end
 xquad
 
