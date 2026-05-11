@@ -20,38 +20,38 @@ To be implemented:
 using SphericalHarmonics, SphericalHarmonicModes
 using DelimitedFiles
 
+"""
+Convert Cartesian coordinates (x, y, z) to spherical (r, ϕ, θ).
+"""
 function cart2spc(x, y, z)
-    """
-    Convert Cartesian coordinates (x, y, z) to spherical (r, ϕ, θ).
-    """
     r = sqrt.(x.^2 + y.^2 + z.^2)
     ϕ = acos.(z ./ r)
     θ = atan.(y, x)
     return r, ϕ, θ
 end
 
+"""
+Convert spherical coordinates (r, ϕ, θ) to Cartesian (x, y, z).
+"""
 function spc2cart(r, ϕ, θ)
-    """
-    Convert spherical coordinates (r, ϕ, θ) to Cartesian (x, y, z).
-    """
     x, y, z = r .* sin.(ϕ) .* cos.(θ), r .* sin.(ϕ) .* sin.(θ), r .* cos.(ϕ)
     return x, y, z
 end
 
+"""
+Get spherical design cubature point set of cardinality 'npoints', where 'npoints' ∈ {50, 201, 513, 1059, 2049, 4051, 8066, 16382}.
+Return the points in spherical coordinates (r, ϕ, θ).
+"""
 function get_points_spc(npoints)
-    """
-    Get spherical design cubature point set of cardinality 'npoints', where 'npoints' ∈ {50, 201, 513, 1059, 2049, 4051, 8066, 16382}.
-    Return the points in spherical coordinates (r, ϕ, θ).
-    """
     points = readdlm("src/cub/sd$(npoints).txt")
     x, y, z = points[:,1], points[:,2], points[:,3]
     return cart2spc(x, y, z)
 end
 
+"""
+Evaluate all spherical harmonics up to and including order ℓₘ at spherical design cubature points (ϕ, θ). 
+"""
 function get_SH(ℓₘ, ϕ, θ)
-    """
-    Evaluate all spherical harmonics up to and including order ℓₘ at spherical design cubature points (ϕ, θ). 
-    """
     nbf = (ℓₘ + 1)^2  # number of basis functions (spherical harmonics)
 
     Ytemp = SphericalHarmonics.computeYlm.(ϕ, θ, lmax = ℓₘ, 
@@ -66,11 +66,11 @@ function get_SH(ℓₘ, ϕ, θ)
     return Y
 end
 
+"""
+Evaluate all spherical harmonics up to and including order ℓₘ at spherical design cubature points (ϕ, θ). 
+Also evaluates first order partial derivatives of the spherical harmonics.
+"""
 function get_SH_der(ℓₘ, ϕ, θ)
-    """
-    Evaluate all spherical harmonics up to and including order ℓₘ at spherical design cubature points (ϕ, θ). 
-    Also evaluates first order partial derivatives of the spherical harmonics.
-    """
     nbf = (ℓₘ + 1)^2  # number of basis functions (spherical harmonics)
 
     modes = ML(0:ℓₘ)                # (ℓ, m) tuples
@@ -124,11 +124,11 @@ function get_SH_der(ℓₘ, ϕ, θ)
     return Y, dY_dϕ, dY_dθ, ℓs, ms, one, mone, zero
 end
 
+"""
+Evaluate all spherical harmonics up to and including order ℓₘ at spherical design cubature points (ϕ, θ). 
+Also evaluates first and second order partial derivatives of the spherical harmonics.
+"""
 function get_SH_der2(ℓₘ, ϕ, θ)
-    """
-    Evaluate all spherical harmonics up to and including order ℓₘ at spherical design cubature points (ϕ, θ). 
-    Also evaluates first and second order partial derivatives of the spherical harmonics.
-    """
     nbf = (ℓₘ + 1)^2  # number of basis functions (spherical harmonics)
 
     modes = ML(0:ℓₘ)                # (ℓ, m) tuples
@@ -213,17 +213,17 @@ function fit_coefs_LS(Y, r)
     return c
 end
 
+"""
+Evaluate spherical harmonic normalization constant for all degrees ℓ at order m=0.
+"""
 function K_lzero(ℓ)
-    """
-    Evaluate spherical harmonic normalization constant for all degrees ℓ at order m=0.
-    """
     return sqrt.((2. * ℓ .+ 1)/(4. * π))
 end
 
+"""
+Evaluate spherical harmonic normalization constant for all degrees ℓ at order m=1.
+"""
 function K_lone(ℓ)
-    """
-    Evaluate spherical harmonic normalization constant for all degrees ℓ at order m=1.
-    """
     return sqrt.((2. * ℓ .+ 1)/(4. * π) ./ (ℓ .* (ℓ .+ 1)))
 end
 
@@ -231,18 +231,20 @@ end
 #     return sqrt.((2. * ℓ .+ 1)/(4. * π) .* (ℓ .* (ℓ .+ 1)))
 # end
 
-function volume(c, Y)
-    """
-    Compute total bubble volume.
-    """
-    r = Y * c 
-    return 4. * π / length(r) * sum(r .^ 3) / 3.
+"""
+Compute total bubble volume.
+"""
+function volume(Dynamic_SH) 
+    return 4. * π / length(Dynamic_SH.r) * sum(Dynamic_SH.r .^ 3) / 3.
 end
 
-function northpole(c, ℓs, one, mone, zero, θ)
-    """
-    Evaluate relevant limits at singularities at the north pole (first spherical design cubature point: ϕ = θ = 0).
-    """
+"""
+Evaluate relevant limits at singularities at the north pole (first spherical design cubature point: ϕ = θ = 0).
+"""
+function northpole(Bub, Precomp_SH)
+    c = Bub.c 
+    ℓs, one, mone, zero, θ = Precomp_SH.ℓs, Precomp_SH.one, Precomp_SH.mone, Precomp_SH.zero, Precomp_SH.θ
+
     dr_dθ_div_sinϕ = sum(K_lone.(ℓs[one]) .* ℓs[one] .* (ℓs[one] .+ 1) / 2. .* c[one] * sin(θ[1]) - 
                         K_lone.(ℓs[mone]) .* ℓs[mone] .* (ℓs[mone] .+ 1) / 2. .* c[mone] * cos(θ[1]))
     # d²r_dθ²_div_sinϕ = sum(K_lone.(ℓs[one]) .* ℓs[one] .* (ℓs[one] .+ 1) / 2. .* c[one] * cos(θ[1]) +
@@ -252,10 +254,27 @@ function northpole(c, ℓs, one, mone, zero, θ)
     return dr_dθ_div_sinϕ, EN_lim
 end
 
-function unit_normal(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, ϕ, θ)
-    """
-    Evaluate outwards facing unit normal at spherical design cubature points, in both spherical and Cartesian coordinates.
-    """
+function Y2r(Bub, Precomp_SH)
+    r = Precomp_SH.Y * Bub.c
+    dr_dϕ = Precomp_SH.dY_dϕ * Bub.c 
+    dr_dθ = Precomp_SH.dY_dθ * Bub.c 
+    d²r_dϕ² = Precomp_SH.d²Y_dϕ² * Bub.c 
+    d²r_dϕdθ = Precomp_SH.d²Y_dθdϕ * Bub.c 
+    d²r_dθ² = Precomp_SH.d²Y_dθ² * Bub.c 
+    dr_dθ_div_sinϕ, EN_lim = northpole(Bub, Precomp_SH)
+
+    Dynamic_SH = (; r, dr_dϕ, dr_dθ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², dr_dθ_div_sinϕ, EN_lim)
+
+    return Dynamic_SH
+end
+
+"""
+Evaluate outwards facing unit normal at spherical design cubature points, in both spherical and Cartesian coordinates.
+"""
+function unit_normal(Precomp_SH, Dynamic_SH)
+    ϕ, θ = Precomp_SH.ϕ, Precomp_SH.θ
+    r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ = Dynamic_SH.r, Dynamic_SH.dr_dϕ, Dynamic_SH.dr_dθ, Dynamic_SH.dr_dθ_div_sinϕ
+
     n_length = zeros(Float64, length(ϕ))
     n_length[2:end] .= sqrt.(r[2:end] .^ 2 + dr_dϕ[2:end] .^ 2 + (dr_dθ[2:end] ./ sin.(ϕ[2:end])) .^2)
     n_length[1] = sqrt(r[1] ^ 2 + dr_dϕ[1] ^ 2 + dr_dθ_div_sinϕ ^ 2) 
@@ -282,10 +301,13 @@ function unit_normal(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, ϕ, θ)
     return n_r, n_ϕ, n_θ, n_x, n_y, n_z
 end
 
-function surface_element(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, ϕ)
-    """
-    Evaluate differential surface element divided by sin(ϕ) at spherical design cubature points.
-    """
+"""
+Evaluate differential surface element divided by sin(ϕ) at spherical design cubature points.
+"""
+function surface_element(Precomp_SH, Dynamic_SH)
+    ϕ = Precomp_SH.ϕ
+    r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ = Dynamic_SH.r, Dynamic_SH.dr_dϕ, Dynamic_SH.dr_dθ, Dynamic_SH.dr_dθ_div_sinϕ
+
     dS = zeros(Float64, length(ϕ))
     dS[2:end] .= r[2:end] .* sqrt.(r[2:end] .^ 2 + dr_dϕ[2:end] .^ 2 + (dr_dθ[2:end] ./ sin.(ϕ[2:end])) .^ 2)
     dS[1] = r[1] * sqrt(r[1] ^ 2 + dr_dϕ[1] ^ 2 + dr_dθ_div_sinϕ ^ 2)
@@ -293,18 +315,21 @@ function surface_element(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, ϕ)
     return dS
 end
 
+"""
+Compute total bubble surface area.
+"""
 function surface_area(dS, ϕ)
-    """
-    Compute total bubble surface area.
-    """
     S = 4. * π / length(ϕ) * sum(dS)
     return S 
 end
 
-function surface_curvature(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², EN_lim, ϕ, dS)
-    """
-    Evaluate twice the local mean curvature (2H = κ) at spherical design cubature points.
-    """
+"""
+Evaluate twice the local mean curvature (2H = κ) at spherical design cubature points.
+"""
+function surface_curvature(Precomp_SH, Dynamic_SH, dS)
+    ϕ = Precomp_SH.ϕ
+    (; r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², EN_lim) = Dynamic_SH
+
     # All divided by sin²ϕ (both denominator and numerator):
     EN = zeros(Float64, length(ϕ)); GL = similar(EN); FM = similar(EN)
     EN[2:end] .= (dr_dϕ[2:end] .^ 2 + r[2:end] .^ 2) .* (r[2:end] .* d²r_dθ²[2:end] ./ (sin.(ϕ[2:end]) .^ 2) + 
@@ -326,20 +351,20 @@ function surface_curvature(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r
     return κ
 end
 
-function surface_tension(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², EN_lim, ϕ, θ, σ)
-    """
-    Compute local surface tension force at spherical design cubature points, in Cartesian coordinates.
-    """
-    _, _, _, n_x, n_y, n_z = unit_normal(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, ϕ, θ)
+"""
+Compute local surface tension force at spherical design cubature points, in Cartesian coordinates.
+"""
+function surface_tension(Precomp_SH, Dynamic_SH, σ)
+    _, _, _, n_x, n_y, n_z = unit_normal(Precomp_SH, Dynamic_SH)
 
-    dS = surface_element(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, ϕ)
+    dS = surface_element(Precomp_SH, Dynamic_SH)
 
-    κ = surface_curvature(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², EN_lim, ϕ, dS)
+    κ = surface_curvature(Precomp_SH, Dynamic_SH, dS)
 
     # Note: kappa is negative and unit normal points out of bubble, so surface tension points into the bubble
-    pre_surf_tension = σ * κ .* (dS * 4. * π / length(ϕ))  
+    pre_surf_tension = σ * κ .* (dS * 4. * π / length(Precomp_SH.ϕ))  
 
-    surf_tension = zeros(Float64, (3, length(ϕ)))
+    surf_tension = zeros(Float64, (3, length(Precomp_SH.ϕ)))
 
     # Surface tension force in each Cartesian coordinate [N]
     surf_tension[:, 1] .= pre_surf_tension .* n_x
@@ -349,43 +374,29 @@ function surface_tension(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_d
     return surf_tension
 end
 
-function compute_p_drop(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², EN_lim, ϕ, σ)
-    """
-    Compute the total pressure drop over a bubble, parametrized using spherical harmonics.
-    """
-    # E = dr_dϕ .^ 2 + r .^ 2
-    # F_div_sinϕ = zeros(Float64, length(ϕ)) 
-    # F_div_sinϕ[2:end] .= dr_dϕ[2:end] .* dr_dθ[2:end] ./ sin.(ϕ[2:end])
-    # F_div_sinϕ[1] = dr_dϕ[1] * dr_dθ_div_sinϕ
-    # G_div_sinϕ = zeros(Float64, length(ϕ))  # first element is zero (at ϕ=0)
-    # G_div_sinϕ[2:end] .= dr_dθ[2:end] .^ 2 ./ sin.(ϕ[2:end]) + r[2:end] .^ 2 .* sin.(ϕ[2:end])
-    # L = (d²r_dϕ² - r) .* n_r + 2. * dr_dϕ .* n_ϕ
-    # M = d²r_dϕdθ .* n_r + dr_dθ .* n_ϕ + (r .* cos.(ϕ) + dr_dϕ .* sin.(ϕ)) .* n_θ
-    # N_div_sinϕ = zeros(Float64, length(ϕ))
-    # N_div_sinϕ[2:end] .= ((d²r_dθ²[2:end] ./ sin.(ϕ[2:end]) - r[2:end] .* sin.(ϕ[2:end])) .* n_r[2:end] 
-    #                         - r[2:end] .* cos.(ϕ[2:end]) .* n_ϕ[2:end]
-    #                         + 2. * dr_dθ[2:end] .* n_θ[2:end])
-    # N_div_sinϕ[1] = (d²r_dθ²_div_sinϕ - r[1] * sin(ϕ[1])) * n_r[1] - r[1] * cos(ϕ[1]) * n_ϕ[1] + 2. * dr_dθ[1] * n_θ[1]
-
+"""
+Compute the total pressure drop over a bubble, parametrized using spherical harmonics.
+"""
+function compute_p_drop(Precomp_SH, Dynamic_SH, σ)
     # Divided by sinϕ:
-    dS = surface_element(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, ϕ)
+    dS = surface_element(Precomp_SH, Dynamic_SH)
 
     S = surface_area(dS, ϕ)
 
-    κ = surface_curvature(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², EN_lim, ϕ, dS)
+    κ = surface_curvature(Precomp_SH, Dynamic_SH, dS)
 
     # println("Mean |FM|: $(sum(abs.(FM))/length(FM)), max: $(maximum(abs.(FM)))")
 
-    p_drop = 4. * π / length(ϕ) * σ / S * sum(κ .* dS)
+    p_drop = 4. * π / length(Precomp_SH.ϕ) * σ / S * sum(κ .* dS)
 
     return p_drop, κ, S
 end
 
+"""
+Compute the total surface area, the local surface curvature, and the total pressure drop over the bubble surface 
+for a perfectly ellipsoidal bubble, with half-axes 'axis1', 'axis2', 'axis3'.
+"""
 function ellipsoid(axis1, axis2, axis3, npoints, σ)
-    """
-    Compute the total surface area, the local surface curvature, and the total pressure drop over the bubble surface 
-    for a perfectly ellipsoidal bubble, with half-axes 'axis1', 'axis2', 'axis3'.
-    """
     # max_ax = max(axis1, max(axis2, axis3))
     # a1, a2, a3 = axis1 / max_ax, axis2 / max_ax, axis3 / max_ax     # normalize
     a1, a2, a3 = axis1, axis2, axis3
@@ -436,15 +447,16 @@ function get_ux_cart(umax, ux, y)
 end
 ###########################################
 
-function time_step(c, Y, dY_dϕ, dY_dθ, ϕ, θ, u, npoints, V, ℓs, ms, one, mone)
-    """
-    Perform one explicit time (sub-)step of a translating and deforming bubble described as a linear combination of spherical harmonics.
-    - u: shape (npoints, 3); velocity field interpolated to spherical design cubature points (ϕ, θ) relative to centroid.
-    Returns update of coefficients 'dc_dt' and of centroid '[u_centr_x, u_centr_y, u_centr_z]'.
-    """
-    r = Y * c
-    dr_dϕ = dY_dϕ * c 
-    dr_dθ = dY_dθ * c 
+"""
+Perform one explicit time (sub-)step of a translating and deforming bubble described as a linear combination of spherical harmonics.
+- u: shape (npoints, 3); velocity field interpolated to spherical design cubature points (ϕ, θ) relative to centroid.
+Returns update of coefficients 'dc_dt' and of centroid '[u_centr_x, u_centr_y, u_centr_z]'.
+"""
+function time_step(Bub, Precomp_SH, Dynamic_SH, u)
+    r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ = Dynamic_SH.r, Dynamic_SH.dr_dϕ, Dynamic_SH.dr_dθ, Dynamic_SH.dr_dθ_div_sinϕ
+    ϕ, θ, ℓs, one, mone, Y = Precomp_SH.ϕ, Precomp_SH.θ, Precomp_SH.ℓs, Precomp_SH.one, Precomp_SH.mone, Precomp_SH.Y
+    c, V = Bub.c, Bub.V
+    npoints = length(ϕ)
 
     # Bubble centroid velocity:
     u_centr = r.^2 .* u[:, 1] .* (r .* sin.(ϕ) .* cos.(θ) - dr_dϕ .* cos.(ϕ) .* cos.(θ)) + 
