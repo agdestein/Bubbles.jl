@@ -13,7 +13,7 @@ import IncompressibleNavierStokes as NS
 getbackend() = CUDA.functional() ? CUDA.CUDABackend() : NS.KernelAbstractions.CPU()
 # getbackend() = NS.KernelAbstractions.CPU()
 
-outdir() = joinpath(@__DIR__, "output", "Bubble") |> mkpath
+outdir() = joinpath(@__DIR__, "..", "output", "Bubble") |> mkpath
 
 getparams() = (;
     # Domain
