@@ -336,15 +336,17 @@ function surface_tension(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_d
 
     κ = surface_curvature(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², EN_lim, ϕ, dS)
 
-    # Note: kappa is negative, unit normal points out of bubble, so surface tension points into the bubble
-    surf_tension = σ * κ .* (dS * 4. * π / length(ϕ))  
+    # Note: kappa is negative and unit normal points out of bubble, so surface tension points into the bubble
+    pre_surf_tension = σ * κ .* (dS * 4. * π / length(ϕ))  
+
+    surf_tension = zeros(Float64, (3, length(ϕ)))
 
     # Surface tension force in each Cartesian coordinate [N]
-    surf_tension_x = surf_tension .* n_x
-    surf_tension_y = surf_tension .* n_y
-    surf_tension_z = surf_tension .* n_z
+    surf_tension[1, :] .= pre_surf_tension .* n_x
+    surf_tension[2, :] .= pre_surf_tension .* n_y
+    surf_tension[3, :] .= pre_surf_tension .* n_z
 
-    return surf_tension_x, surf_tension_y, surf_tension_z
+    return surf_tension
 end
 
 function compute_p_drop(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², EN_lim, ϕ, σ)
