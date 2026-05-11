@@ -212,14 +212,14 @@ function get_SH_der2(ℓₘ, ϕ, θ)
     return (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero)
 end
 
-function bubble_setup(ncub, ℓₘ, R, σ)
+function bubble_setup(ncub, ℓₘ, R, σ, L)
     # Spherical design cubature points:
     _, ϕ, θ = get_points_spc(ncub)
 
     # Bubble initialization:
     c = zeros(Float64, (ℓₘ + 1) ^ 2)    # spherical harmonics coefficients
     c[1] = R * sqrt(4. * π)
-    centr = zeros(Float64, 3)           # centroid position 
+    centr = [L/2, L/2, L/2]           # centroid position 
     V = 4. / 3. * π * R^3               # total bubble volume
     Bub = (; c, centr, V, σ)
 
