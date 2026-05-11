@@ -252,9 +252,9 @@ function northpole(c, ℓs, one, mone, zero, θ)
     return dr_dθ_div_sinϕ, EN_lim
 end
 
-function unit_normal(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, ϕ)
+function unit_normal(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, ϕ, θ)
     """
-    Evaluate outwards facing unit normal at spherical design cubature points.
+    Evaluate outwards facing unit normal at spherical design cubature points, in both spherical and Cartesian coordinates.
     """
     n_length = zeros(Float64, length(ϕ))
     n_length[2:end] .= sqrt.(r[2:end] .^ 2 + dr_dϕ[2:end] .^ 2 + (dr_dθ[2:end] ./ sin.(ϕ[2:end])) .^2)
@@ -266,7 +266,20 @@ function unit_normal(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, ϕ)
     n_θ[1] = dr_dθ_div_sinϕ / n_length[1]
     # println("length: $(n_length[1]), div: $(dr_dθ_div_sinϕ), n_θ: $(n_θ[1])")
 
-    return n_r, n_ϕ, n_θ
+    # n_x, n_y, n_z = similar(n_r), similar(n_r), similar(n_r)
+    n_x = r .* sin.(ϕ) .* cos.(θ) - dr_dϕ .* cos.(ϕ) .* cos.(θ)
+    n_x[2:end] .= n_x[2:end] + dr_dθ[2:end] ./ sin.(ϕ[2:end]) .* sin.(θ[2:end])
+    n_x[1] = n_x[1] + dr_dθ_div_sinϕ * sin(θ[1])
+
+    n_y = r .* sin.(ϕ) .* sin.(θ) - dr_dϕ .* cos.(ϕ) .* sin.(θ)
+    n_y[2:end] .= n_y[2:end] - dr_dθ[2:end] ./ sin.(ϕ[2:end]) .* cos.(θ[2:end])
+    n_y[1] = n_y[1] - dr_dθ_div_sinϕ * cos(θ[1])
+
+    n_z = r .* cos.(ϕ) + dr_dϕ .* sin.(ϕ)
+
+    n_x, n_y, n_z .= n_x ./ n_length, n_y ./ n_length, n_z ./ n_length
+
+    return n_r, n_ϕ, n_θ, n_x, n_y, n_z
 end
 
 function surface_element(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, ϕ)
@@ -311,6 +324,26 @@ function surface_curvature(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r
     κ = ((EN + GL - 2. * FM) ./ dS .* r) ./ (dS .^ 2)
 
     return κ
+end
+
+function surface_tension(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², EN_lim, ϕ, θ, σ)
+    """
+    Compute local surface tension force at spherical design cubature points, in Cartesian coordinates.
+    """
+    _, _, _, n_x, n_y, n_z = unit_normal(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, ϕ, θ)
+
+    dS = surface_element(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, ϕ)
+
+    κ = surface_curvature(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², EN_lim, ϕ, dS)
+
+    surf_tension = σ * κ .* dS
+
+    # Surface tension force in each Cartesian coordinate [N]
+    surf_tension_x = surf_tension .* n_x
+    surf_tension_y = surf_tension .* n_y
+    surf_tension_z = surf_tension .* n_z
+
+    return surf_tension_x, surf_tension_y, surf_tension_z
 end
 
 function compute_p_drop(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², EN_lim, ϕ, σ)
