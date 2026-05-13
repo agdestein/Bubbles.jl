@@ -15,13 +15,13 @@ getparams() = (;
     # densities = (; liquid = 1.0e3, gas = 1.25),
     # densities = (; liquid = 1.0, gas = 1e-3),
     # viscosities = (; liquid = 1.0e-3, gas = 1.8e-5),
-    densities = (; liquid = 1.0, gas = 1.0),
-    viscosities = (; liquid = 5.0e-4, gas = 5.0e-4),
+    densities = (; liquid = 1e3, gas = 1.25),
+    viscosities = (; liquid = 1e-6, gas = 1.44e-5),  # kinematic!
 
     # Time integration
-    dt = 2.0e-3,
-    nsubstep = 25, # Steps between plot updates
-    nstep = 400,
+    dt = 1.0e-3,
+    nsubstep = 1, # Steps between plot updates
+    nstep = 20,
 )
 
 "Left index `n` times away in direction `i`."
@@ -32,9 +32,10 @@ getparams() = (;
 @inline right(I::CartesianIndex{D}, i, n = 1) where {D} =
     CartesianIndex(ntuple(j -> j == i ? I[j] + n : I[j], D))
 
-function map_surface_tension!(Fu, setup, surf_tension, r, ϕ, θ, Bub)
+function map_surface_tension!(Fu, setup, surf_tension, r, ϕ, θ, Bub, fractions)
     xcub, ycub, zcub = spc2cart(r, ϕ, θ)
 
+    (; densities) = getparams()
 
     for i = eachindex(xcub)     # 1:length(xcub)
         # Find indices of pressure volume containing quadrature point
@@ -42,7 +43,6 @@ function map_surface_tension!(Fu, setup, surf_tension, r, ϕ, θ, Bub)
          xcub[i] + Bub.centr[1],
          ycub[i] + Bub.centr[2],
          zcub[i] + Bub.centr[3]
-
 
         neighbors = ntuple(3) do dim
             xdim = setup.xu[dim][dim] # Vector of staggered points in direction dim
@@ -68,8 +68,13 @@ function map_surface_tension!(Fu, setup, surf_tension, r, ϕ, θ, Bub)
         I = CartesianIndex(neighbors)
         for dim = 1:3
             @assert I[dim] > 1
-            Fu[left(I, dim, 1), dim] += Fσ[dim] * (xquad[dim] - bounds[dim][1]) / (bounds[dim][2] - bounds[dim][1])
-            Fu[I, dim] += Fσ[dim] * (bounds[dim][2] - xquad[dim]) / (bounds[dim][2] - bounds[dim][1])
+            # Find phase fraction for each velocity cell and divide Fσ by effective density:
+            a = (fractions[I] + fractions[right(I, dim, 1)]) / 2        # interpolate to velocity point
+            dens = (1 - a) * densities.liquid + a * densities.gas       # effective density
+            a_left = (fractions[left(I, dim, 1)] + fractions[I]) / 2
+            dens_left = (1 - a_left) * densities.liquid + a_left * densities.gas
+            Fu[left(I, dim, 1), dim] += Fσ[dim] * (xquad[dim] - bounds[dim][1]) / (bounds[dim][2] - bounds[dim][1]) / dens_left
+            Fu[I, dim] += Fσ[dim] * (bounds[dim][2] - xquad[dim]) / (bounds[dim][2] - bounds[dim][1]) / dens
         end
 
     end
@@ -193,7 +198,7 @@ function compute_fractions_SH!(fractions, Bub, Precomp_SH, setup)
         I = CartesianIndices(fractions)[index]
         i, j, k = I.I
         ninside = 0
-        for dk in (0,1), dj in (0, 1), di in (0, 1)
+        for dk in (0, 1), dj in (0, 1), di in (0, 1)
             point = (xu[1][i + di], xu[2][j + dj], xu[3][k + dk])
             ninside += check_if_inside_SH(point, Bub, Precomp_SH)
         end
@@ -229,7 +234,7 @@ function rk3step_SH!(F, U0, U, t, dt, fractions, p, psolver, setup, Bub, Precomp
         # NS.convectiondiffusion!(F.u, U.u, setup, viscosity) # This adds to existing force
         convectiondiffusion_nonconstant_SH!(F.u, U.u, fractions, setup) # This adds to existing force
         tension = surface_tension(Precomp_SH, Dynamic_SH, Bub.σ)
-        map_surface_tension!(F.u, setup, tension, Dynamic_SH.r, Precomp_SH.ϕ, Precomp_SH.θ, Bub)
+        map_surface_tension!(F.u, setup, tension, Dynamic_SH.r, Precomp_SH.ϕ, Precomp_SH.θ, Bub, fractions)
         applygravity!(F.u)
         u_cub = map_velocity(U.u, setup, Dynamic_SH.r, Precomp_SH.ϕ, Precomp_SH.θ, Bub)
         dc_dt, dcentr_dt = time_step(Bub, Precomp_SH, Dynamic_SH, u_cub)
@@ -281,6 +286,7 @@ function solveandplot(u, Bub, setup, psolver, Precomp_SH)
             # Perform one RK3 step of step size `dt`
             rk3step_SH!(F, U0, U, t, dt, fractions, p, psolver, setup, Bub, Precomp_SH)
             t += dt
+            @info "bubble centroid = $(Bub.centr), mean z-velocity = $(sum(U.u[:, :, :, 3])/(3*size(U.u)[1]))"
 
             # @info "itime = $itime / $nstep, isub = $isub / $nsubstep, t = $(round(t, digits = 4))" # maximum(abs, U.u)
         end
