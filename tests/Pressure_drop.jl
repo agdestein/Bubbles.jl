@@ -6,36 +6,43 @@ First fits spherical harmonics to an ellipsoidal reference bubble, then computes
 and compare it to the analytical result for verification of the surface curvature implementation.
 """
 
-Bub = (; c, centroid, V)
-Precomp_SH = (; ϕ, θ, Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero)
+# Bub = (; c, centroid, V)
+# Precomp_SH = (; ϕ, θ, Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero)
 
 function fit_and_p_drop_ellipsoid(a1, a2, a3, ℓₘ, npoints, σ)
     r_fit, ϕ_fit, θ_fit, κ, p_drop_ellipsoid, S_ellipsoid = ellipsoid(a1, a2, a3, npoints, σ)
-    Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero = get_SH_der2(ℓₘ, ϕ_fit, θ_fit)
+    (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero) = get_SH_der2(ℓₘ, ϕ_fit, θ_fit)
     c = fit_coefs_LS(Y, r_fit)
     r = Y * c 
 
-    println("Volume: $(volume(c, Y)), actual: $(4. / 3. * π * a1 * a2 * a3)")
+    Dynamic_SH = (; r, c)
+    Bub = (; c, σ)
+    ϕ, θ = ϕ_fit, θ_fit
+    Precomp_SH = (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero, ϕ, θ)
+
+    println("Volume: $(volume(Dynamic_SH)), actual: $(4. / 3. * π * a1 * a2 * a3)")
 
     r_test, ϕ_test, θ_test, _, p_drop_accurate, S_accurate = ellipsoid(a1, a2, a3, 16382, σ)
     Y_test = get_SH(ℓₘ, ϕ_test, θ_test)
     errors_rel = abs.(Y_test * c - r_test) ./ r_test 
     println("ℓ=$(ℓₘ), max abs rel error: $(maximum(errors_rel)), mean: $(sum(errors_rel) / length(errors_rel))")
 
-    dr_dϕ = dY_dϕ * c 
-    dr_dθ = dY_dθ * c 
-    d²r_dϕ² = d²Y_dϕ² * c 
-    d²r_dϕdθ = d²Y_dθdϕ * c 
-    d²r_dθ² = d²Y_dθ² * c 
-    dr_dθ_div_sinϕ, EN_lim = northpole(c, ℓs, one, mone, zero, θ_fit)
+
+    Dynamic_SH = Y2r(Bub, Precomp_SH)
+    # dr_dϕ = dY_dϕ * c 
+    # dr_dθ = dY_dθ * c 
+    # d²r_dϕ² = d²Y_dϕ² * c 
+    # d²r_dϕdθ = d²Y_dθdϕ * c 
+    # d²r_dθ² = d²Y_dθ² * c 
+    dr_dθ_div_sinϕ, EN_lim = northpole(Bub, Precomp_SH)
     # n_r, n_ϕ, n_θ = unit_normal(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, ϕ_fit)
-    p_drop, κ_SH, S = compute_p_drop(r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², EN_lim, ϕ_fit, σ)
+    p_drop, κ_SH, S = compute_p_drop(Precomp_SH, Dynamic_SH, σ)
 
     # println(p_drop)
     # println(p_drop_ellipsoid)
     # println(p_drop_accurate)
 
-    V_SH = volume(c, Y)
+    V_SH = volume(Dynamic_SH)
     V = 4. / 3. * π * a1 * a2 * a3
     V_error = abs(V_SH - V) / V 
 
@@ -103,10 +110,10 @@ end
 a1, a2, a3 = 3e-3 * 0.99994761398402279035, 2e-3 * 0.99994761398402279035, 1e-3 * 0.99994761398402279035
 # a1, a2, a3 = 3e-3, 2e-3, 1e-3
 ℓₘ = 10
-n_fit = 8066
+n_fit = 16382
 
-# ℓ_maxs = [3, 5, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40]
-ℓ_maxs = [3, 5, 8, 20]
+ℓ_maxs = [3, 5, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 34, 40]
+# ℓ_maxs = [3, 5, 8, 20]
 
 V_errs = zeros(Float64, length(ℓ_maxs))
 p_errs = similar(V_errs)
@@ -138,17 +145,17 @@ p_err_FT = abs(p_FT - p_ref) / p_ref
 # println(p_FT)
 # println(p_err_FT)
 
-set_theme!(Theme(fontsize = 20))
+set_theme!(Theme(fontsize = 25))
 
 fig = Figure(backgroundcolor = :transparent)
 
 ax = Axis(fig[1, 1], xlabel = "#basis functions", ylabel = L"\frac{\left|[p]_{\text{sim}} - [p]\right|}{\left|[p]\right|}", 
             xscale=log10, yscale=log10, xticks=LogTicks(0:4), yticks=LogTicks(-15:0), backgroundcolor = :transparent,
-            xminorticksvisible = true, xminorticks = IntervalsBetween(9)) 
-
-scatterlines!(ax, (ℓ_maxs .+ 1) .^ 2, abs.(p_errs), marker = :circle, linestyle = :dash, label = L"[p]_{\text{SH}}")
-hlines!(ax, abs(p_err_FT), linestyle = :dot, label = L"[p]_{\text{TRI}}", color = Cycled(1))
-axislegend(ax, position = :lb, backgroundcolor = :transparent)
+            xminorticksvisible = true, xminorticks = IntervalsBetween(9), xgridvisible = false, ygridvisible = false,
+            yminorticksvisible = true, yminorticks = IntervalsBetween(9)) 
+hlines!(ax, abs(p_err_FT), linestyle = :dot, label = L"[p]_{\text{TRI}}", color = :forestgreen, linewidth = 3)
+scatterlines!(ax, (ℓ_maxs .+ 1) .^ 2, abs.(p_errs), marker = :circle, linestyle = :dash, label = L"[p]_{\text{SH}}", color = :mediumorchid4, linewidth = 3, markersize = 13.5)
+axislegend(ax, position = :rt, backgroundcolor = :transparent)
 
 # ax = Axis(fig[1, 1], xlabel = "#basis functions", ylabel = "Relative absolute error", 
 #             xscale=log10, yscale=log10, xticks=LogTicks(0:4), yticks=LogTicks(-15:0), backgroundcolor = :transparent,
@@ -159,8 +166,9 @@ axislegend(ax, position = :lb, backgroundcolor = :transparent)
 # hlines!(ax, V_err_FT, linestyle = :dot, label = L"V_{\text{TRI}}", color = Cycled(1))
 # hlines!(ax, - p_err_FT, linestyle = :dot, label = L"[p]_{\text{TRI}}", color = Cycled(2))
 # axislegend(ax, position = :lb, backgroundcolor = :transparent)
-display(fig)
+# display(fig)
 
+save("Ellipsoid_p_drop_16382.eps", fig)
 # save("Ellipsoid_p_drop_8066_V_FT.png", fig)
 # save("Ellipsoid_V_p_drop_8066.png", fig)
 ###################################################################################################################################
