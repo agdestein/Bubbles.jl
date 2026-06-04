@@ -134,6 +134,10 @@ Also evaluates first and second order partial derivatives of the spherical harmo
 """
 function get_SH_der2(ℓₘ, ϕ, θ)
     nbf = (ℓₘ + 1)^2  # number of basis functions (spherical harmonics)
+    ϕv = ndims(ϕ) == 0 ? [ϕ] : vec(ϕ)
+    θv = ndims(θ) == 0 ? [θ] : vec(θ)
+    length(ϕv) == length(θv) || throw(ArgumentError("ϕ and θ must have the same length"))
+    θmat = reshape(θv, :, 1)
 
     modes = ML(0:ℓₘ)                # (ℓ, m) tuples
     ℓs = first.(modes)              # ℓ values, in storage order
@@ -155,21 +159,21 @@ function get_SH_der2(ℓₘ, ϕ, θ)
         end
     end
 
-    Ytemp = SphericalHarmonics.computeYlm.(ϕ, θ, lmax = ℓₘ, 
+    Ytemp = SphericalHarmonics.computeYlm.(ϕv, θv, lmax = ℓₘ, 
                                         SHType = SphericalHarmonics.RealHarmonics())
-    Ptemp = SphericalHarmonics.computePlmcostheta.(ϕ, ℓₘ)   # only nonnegative m by default
+    Ptemp = SphericalHarmonics.computePlmcostheta.(ϕv, ℓₘ)   # only nonnegative m by default
 
-    Y = zeros(Float64, length(ϕ), nbf) # convert to matrix
-    P = zeros(Float64, length(ϕ), length(ms_nonneg))
+    Y = zeros(Float64, length(ϕv), nbf) # convert to matrix
+    P = zeros(Float64, length(ϕv), length(ms_nonneg))
 
-    for i = 1:length(ϕ)
+    for i = 1:length(ϕv)
         Y[i, :] .= Ytemp[i][:]
         P[i, :] .= Ptemp[i][:]
     end
 
     Ytemp = 0; Ptemp = 0    # free
 
-    dY_dϕ = zeros(Float64, length(ϕ), nbf)
+    dY_dϕ = zeros(Float64, length(ϕv), nbf)
     dY_dϕ[:, zero] .= sqrt.(ℓs[zero] .* (ℓs[zero] .+ 1) / 2.)' .* P[:, clamp.(nonneg_zero .+ 1, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)]
     Y_ϕ_neg = (
             sqrt.((ℓs[neg] .- abs.(ms[neg])) .* (ℓs[neg] .+ abs.(ms[neg]) .+ 1))' .* P[:, clamp.(nonneg_neg .+ 1, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)] .* (ℓs[neg] .!= abs.(ms[neg]))'
@@ -179,19 +183,19 @@ function get_SH_der2(ℓₘ, ϕ, θ)
             sqrt.((ℓs[pos] - ms[pos]) .* (ℓs[pos] + ms[pos] .+ 1))' .* P[:, clamp.(nonneg_pos .+ 1, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)] .* (ℓs[pos] .!= ms[pos])'
             - sqrt.((ℓs[pos] + ms[pos]) .* (ℓs[pos] - ms[pos] .+ 1))' .* P[:, nonneg_pos .- 1]
         ) / 2.
-    dY_dϕ[:, neg] .= sin.(abs.(ms[neg])' .* θ[:, :]) .* Y_ϕ_neg
-    dY_dϕ[:, pos] .= cos.(ms[pos]' .* θ[:, :]) .* Y_ϕ_pos
+    dY_dϕ[:, neg] .= sin.(abs.(ms[neg])' .* θmat) .* Y_ϕ_neg
+    dY_dϕ[:, pos] .= cos.(ms[pos]' .* θmat) .* Y_ϕ_pos
 
     dY_dθ = - ms' .* Y[:, m_flip]
 
     d²Y_dθ² = - ((ms).^2)' .* Y
 
-    d²Y_dθdϕ = zeros(Float64, length(ϕ), nbf)
-    d²Y_dθdϕ[:, neg] .= abs.(ms[neg])' .* cos.(abs.(ms[neg])' .* θ[:, :]) .* Y_ϕ_neg
-    d²Y_dθdϕ[:, pos] .= - ms[pos]' .* sin.(ms[pos]' .* θ[:, :]) .* Y_ϕ_pos
+    d²Y_dθdϕ = zeros(Float64, length(ϕv), nbf)
+    d²Y_dθdϕ[:, neg] .= abs.(ms[neg])' .* cos.(abs.(ms[neg])' .* θmat) .* Y_ϕ_neg
+    d²Y_dθdϕ[:, pos] .= - ms[pos]' .* sin.(ms[pos]' .* θmat) .* Y_ϕ_pos
 
-    d²Y_dϕ² = zeros(Float64, length(ϕ), nbf)
-    d²Y_dϕ²[:, neg] .= sin.(abs.(ms[neg])' .* θ[:, :]) .* (sqrt.((ℓs[neg] - abs.(ms[neg]) .- 1) .* (ℓs[neg] - abs.(ms[neg])) .* (ℓs[neg] + abs.(ms[neg]) .+ 1) .* (ℓs[neg] + abs.(ms[neg]) .+ 2))' .* 
+    d²Y_dϕ² = zeros(Float64, length(ϕv), nbf)
+    d²Y_dϕ²[:, neg] .= sin.(abs.(ms[neg])' .* θmat) .* (sqrt.((ℓs[neg] - abs.(ms[neg]) .- 1) .* (ℓs[neg] - abs.(ms[neg])) .* (ℓs[neg] + abs.(ms[neg]) .+ 1) .* (ℓs[neg] + abs.(ms[neg]) .+ 2))' .* 
                         P[:, clamp.(nonneg_neg .+ 2, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)] .* (abs.(ms[neg]) .+ 2 .≤ ℓs[neg])'
                         - 2. * ((ℓs[neg] + abs.(ms[neg])) .* (ℓs[neg] - abs.(ms[neg])) + ℓs[neg])' .* P[:, nonneg_neg]
                         - ((ℓs[neg] + abs.(ms[neg])) .* (ℓs[neg] - abs.(ms[neg]) .+ 1))' .* P[:, nonneg_neg] .* (abs.(ms[neg]) .== 1)'
@@ -201,7 +205,7 @@ function get_SH_der2(ℓₘ, ϕ, θ)
     d²Y_dϕ²[:, zero] .= (sqrt.((ℓs[zero] .+ 2) .* (ℓs[zero] .+ 1) .* ℓs[zero] .* (ℓs[zero] .- 1))' .* P[:, clamp.(nonneg_zero .+ 2, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)]
                         - (ℓs[zero] .* (ℓs[zero] .+ 1))' .* P[:, nonneg_zero]
         ) / (2. * sqrt(2.))
-    d²Y_dϕ²[:, pos] .= cos.(ms[pos]' .* θ[:, :]) .* (sqrt.((ℓs[pos] - ms[pos] .- 1) .* (ℓs[pos] - ms[pos]) .* (ℓs[pos] + ms[pos] .+ 1) .* (ℓs[pos] + ms[pos] .+ 2))' .* 
+    d²Y_dϕ²[:, pos] .= cos.(ms[pos]' .* θmat) .* (sqrt.((ℓs[pos] - ms[pos] .- 1) .* (ℓs[pos] - ms[pos]) .* (ℓs[pos] + ms[pos] .+ 1) .* (ℓs[pos] + ms[pos] .+ 2))' .* 
                         P[:, clamp.(nonneg_pos .+ 2, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)] .* (ms[pos] .+ 2 .≤ ℓs[pos])'
                         - 2. * ((ℓs[pos] + ms[pos]) .* (ℓs[pos] - ms[pos]) + ℓs[pos])' .* P[:, nonneg_pos] 
                         - ((ℓs[pos] + ms[pos]) .* (ℓs[pos] - ms[pos] .+ 1))' .* P[:, nonneg_pos] .* (ms[pos] .== 1)'
@@ -219,6 +223,10 @@ function bubble_setup(ncub, ℓₘ, R, σ, L)
     # Bubble initialization:
     c = zeros(Float64, (ℓₘ + 1) ^ 2)    # spherical harmonics coefficients
     c[1] = R * sqrt(4. * π)
+
+    # Oscillating drop test case (Lamb, 1932):
+    # c[7] = sin(1e-3)
+
     centr = [L/2, L/2, L/2]           # centroid position 
     V = 4. / 3. * π * R^3               # total bubble volume
     Bub = (; c, centr, V, σ)
@@ -333,7 +341,7 @@ function surface_element(Precomp_SH, Dynamic_SH)
     r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ = Dynamic_SH.r, Dynamic_SH.dr_dϕ, Dynamic_SH.dr_dθ, Dynamic_SH.dr_dθ_div_sinϕ
 
     dS = zeros(Float64, length(ϕ))
-    dS[2:end] .= r[2:end] .* sqrt.(r[2:end] .^ 2 + dr_dϕ[2:end] .^ 2 + (dr_dθ[2:end] ./ sin.(ϕ[2:end])) .^ 2)
+    dS[2:end] = r[2:end] * sqrt(r[2:end] ^ 2 + dr_dϕ[2:end] ^ 2 + (dr_dθ[2:end] / sin.(ϕ[2:end])) ^ 2)
     dS[1] = r[1] * sqrt(r[1] ^ 2 + dr_dϕ[1] ^ 2 + dr_dθ_div_sinϕ ^ 2)
 
     return dS
@@ -356,21 +364,21 @@ function surface_curvature(Precomp_SH, Dynamic_SH, dS)
 
     # All divided by sin²ϕ (both denominator and numerator):
     EN = zeros(Float64, length(ϕ)); GL = similar(EN); FM = similar(EN)
-    EN[2:end] .= (dr_dϕ[2:end] .^ 2 + r[2:end] .^ 2) .* (r[2:end] .* d²r_dθ²[2:end] ./ (sin.(ϕ[2:end]) .^ 2) + 
-                                                        r[2:end] .* dr_dϕ[2:end] .* cos.(ϕ[2:end]) ./ sin.(ϕ[2:end]) - 
-                                                        2. * (dr_dθ[2:end] ./ sin.(ϕ[2:end])) .^ 2 - 
-                                                        r[2:end] .^ 2)
+    EN[2:end] = (dr_dϕ[2:end] ^ 2 + r[2:end] ^ 2) .* (r[2:end] * d²r_dθ²[2:end] / (sin.(ϕ[2:end]) ^ 2) + 
+                                                        r[2:end] * dr_dϕ[2:end] * cos.(ϕ[2:end]) / sin.(ϕ[2:end]) - 
+                                                        2. * (dr_dθ[2:end] / sin.(ϕ[2:end])) ^ 2 - 
+                                                        r[2:end] ^ 2)
     EN[1] = (dr_dϕ[1] ^ 2 + r[1] ^ 2) * (r[1] * EN_lim - 2. * dr_dθ_div_sinϕ ^ 2 - r[1] ^ 2)
-    GL[2:end] .= ((dr_dθ[2:end] ./ sin.(ϕ[2:end])) .^ 2 + r[2:end] .^ 2) .* (r[2:end] .* d²r_dϕ²[2:end] -
-                                                                            2. * dr_dϕ[2:end] .^ 2 - 
-                                                                            r[2:end] .^ 2)
+    GL[2:end] = ((dr_dθ[2:end] / sin.(ϕ[2:end])) ^ 2 + r[2:end] ^ 2) * (r[2:end] * d²r_dϕ²[2:end] -
+                                                                            2. * dr_dϕ[2:end] ^ 2 - 
+                                                                            r[2:end] ^ 2)
     GL[1] = (dr_dθ_div_sinϕ ^ 2 + r[1] ^ 2) * (r[1] * d²r_dϕ²[1] - 2. * dr_dϕ[1] ^ 2 - r[1] ^ 2)
-    FM[2:end] .= dr_dϕ[2:end] .* dr_dθ[2:end] ./ sin.(ϕ[2:end]) .* (-2. * dr_dϕ[2:end] .* dr_dθ[2:end] ./ sin.(ϕ[2:end]) + 
-                                                                    r[2:end] .* d²r_dϕdθ[2:end] ./ sin.(ϕ[2:end]) -
-                                                                    r[2:end] .* dr_dθ[2:end] .* cos.(ϕ[2:end]) ./ (sin.(ϕ[2:end]) .^ 2))
+    FM[2:end] = dr_dϕ[2:end] * dr_dθ[2:end] / sin.(ϕ[2:end]) * (-2. * dr_dϕ[2:end] * dr_dθ[2:end] / sin.(ϕ[2:end]) + 
+                                                                    r[2:end] * d²r_dϕdθ[2:end] / sin.(ϕ[2:end]) -
+                                                                    r[2:end] * dr_dθ[2:end] * cos.(ϕ[2:end]) / (sin.(ϕ[2:end]) ^ 2))
     FM[1] = dr_dϕ[1] * dr_dθ_div_sinϕ * (-2. * dr_dϕ[1] * dr_dθ_div_sinϕ + 0.)
 
-    κ = ((EN + GL - 2. * FM) ./ dS .* r) ./ (dS .^ 2)
+    κ = ((EN + GL - 2. * FM) / dS * r) / (dS .^ 2)
 
     return κ
 end
@@ -381,9 +389,9 @@ Compute local surface tension force at spherical design cubature points, in Cart
 function surface_tension(Precomp_SH, Dynamic_SH, σ)
     _, _, _, n_x, n_y, n_z = unit_normal(Precomp_SH, Dynamic_SH)
 
-    dS = surface_element(Precomp_SH, Dynamic_SH)
+    dS = surface_element.(Precomp_SH, Dynamic_SH)
 
-    κ = surface_curvature(Precomp_SH, Dynamic_SH, dS)
+    κ = surface_curvature.(Precomp_SH, Dynamic_SH, dS)
 
     # Note: kappa is negative and unit normal points out of bubble, so surface tension points into the bubble
     pre_surf_tension = σ * κ .* (dS * 4. * π / length(Precomp_SH.ϕ))  
@@ -403,11 +411,11 @@ Compute the total pressure drop over a bubble, parametrized using spherical harm
 """
 function compute_p_drop(Precomp_SH, Dynamic_SH, σ)
     # Divided by sinϕ:
-    dS = surface_element(Precomp_SH, Dynamic_SH)
+    dS = surface_element.(Precomp_SH, Dynamic_SH)
 
-    S = surface_area(dS, ϕ)
+    S = surface_area(dS, Precomp_SH.ϕ)
 
-    κ = surface_curvature(Precomp_SH, Dynamic_SH, dS)
+    κ = surface_curvature.(Precomp_SH, Dynamic_SH, dS)
 
     # println("Mean |FM|: $(sum(abs.(FM))/length(FM)), max: $(maximum(abs.(FM)))")
 
