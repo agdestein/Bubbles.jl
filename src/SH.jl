@@ -225,7 +225,7 @@ function bubble_setup(ncub, ℓₘ, R, σ, L)
     c[1] = R * sqrt(4. * π)
 
     # Oscillating drop test case (Lamb, 1932):
-    # c[7] = sin(1e-3)
+    c[7] = sin(5e-3)    # ℓ=2, m=0
 
     centr = [L/2, L/2, L/2]           # centroid position 
     V = 4. / 3. * π * R^3               # total bubble volume
@@ -341,8 +341,12 @@ function surface_element(Precomp_SH, Dynamic_SH)
     r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ = Dynamic_SH.r, Dynamic_SH.dr_dϕ, Dynamic_SH.dr_dθ, Dynamic_SH.dr_dθ_div_sinϕ
 
     dS = zeros(Float64, length(ϕ))
-    dS[2:end] = r[2:end] * sqrt(r[2:end] ^ 2 + dr_dϕ[2:end] ^ 2 + (dr_dθ[2:end] / sin.(ϕ[2:end])) ^ 2)
-    dS[1] = r[1] * sqrt(r[1] ^ 2 + dr_dϕ[1] ^ 2 + dr_dθ_div_sinϕ ^ 2)
+    dS[2:end] .= r[2:end] .* sqrt.(r[2:end] .^ 2 .+ dr_dϕ[2:end] .^ 2 .+ (dr_dθ[2:end] ./ sin.(ϕ[2:end])) .^ 2)
+    if abs(ϕ[1]) < 1e-10  # north pole: use L'Hôpital limit
+        dS[1] = r[1] * sqrt(r[1] ^ 2 + dr_dϕ[1] ^ 2 + dr_dθ_div_sinϕ ^ 2)
+    else    # scalar call (single element vector)
+        dS[1] = r[1] * sqrt(r[1] ^ 2 + dr_dϕ[1] ^ 2 + (dr_dθ[1] / sin(ϕ[1])) ^ 2)
+    end
 
     return dS
 end
@@ -364,21 +368,33 @@ function surface_curvature(Precomp_SH, Dynamic_SH, dS)
 
     # All divided by sin²ϕ (both denominator and numerator):
     EN = zeros(Float64, length(ϕ)); GL = similar(EN); FM = similar(EN)
-    EN[2:end] = (dr_dϕ[2:end] ^ 2 + r[2:end] ^ 2) .* (r[2:end] * d²r_dθ²[2:end] / (sin.(ϕ[2:end]) ^ 2) + 
-                                                        r[2:end] * dr_dϕ[2:end] * cos.(ϕ[2:end]) / sin.(ϕ[2:end]) - 
-                                                        2. * (dr_dθ[2:end] / sin.(ϕ[2:end])) ^ 2 - 
-                                                        r[2:end] ^ 2)
-    EN[1] = (dr_dϕ[1] ^ 2 + r[1] ^ 2) * (r[1] * EN_lim - 2. * dr_dθ_div_sinϕ ^ 2 - r[1] ^ 2)
-    GL[2:end] = ((dr_dθ[2:end] / sin.(ϕ[2:end])) ^ 2 + r[2:end] ^ 2) * (r[2:end] * d²r_dϕ²[2:end] -
-                                                                            2. * dr_dϕ[2:end] ^ 2 - 
-                                                                            r[2:end] ^ 2)
-    GL[1] = (dr_dθ_div_sinϕ ^ 2 + r[1] ^ 2) * (r[1] * d²r_dϕ²[1] - 2. * dr_dϕ[1] ^ 2 - r[1] ^ 2)
-    FM[2:end] = dr_dϕ[2:end] * dr_dθ[2:end] / sin.(ϕ[2:end]) * (-2. * dr_dϕ[2:end] * dr_dθ[2:end] / sin.(ϕ[2:end]) + 
-                                                                    r[2:end] * d²r_dϕdθ[2:end] / sin.(ϕ[2:end]) -
-                                                                    r[2:end] * dr_dθ[2:end] * cos.(ϕ[2:end]) / (sin.(ϕ[2:end]) ^ 2))
-    FM[1] = dr_dϕ[1] * dr_dθ_div_sinϕ * (-2. * dr_dϕ[1] * dr_dθ_div_sinϕ + 0.)
+    EN[2:end] .= (dr_dϕ[2:end] .^ 2 .+ r[2:end] .^ 2) .* (r[2:end] .* d²r_dθ²[2:end] ./ (sin.(ϕ[2:end]) .^ 2) .+
+                                                           r[2:end] .* dr_dϕ[2:end] .* cos.(ϕ[2:end]) ./ sin.(ϕ[2:end]) .-
+                                                           2. .* (dr_dθ[2:end] ./ sin.(ϕ[2:end])) .^ 2 .-
+                                                           r[2:end] .^ 2)
+    GL[2:end] .= ((dr_dθ[2:end] ./ sin.(ϕ[2:end])) .^ 2 .+ r[2:end] .^ 2) .* (r[2:end] .* d²r_dϕ²[2:end] .-
+                                                                                 2. .* dr_dϕ[2:end] .^ 2 .-
+                                                                                 r[2:end] .^ 2)
+    FM[2:end] .= dr_dϕ[2:end] .* dr_dθ[2:end] ./ sin.(ϕ[2:end]) .* (-2. .* dr_dϕ[2:end] .* dr_dθ[2:end] ./ sin.(ϕ[2:end]) .+
+                                                                      r[2:end] .* d²r_dϕdθ[2:end] ./ sin.(ϕ[2:end]) .-
+                                                                      r[2:end] .* dr_dθ[2:end] .* cos.(ϕ[2:end]) ./ (sin.(ϕ[2:end]) .^ 2))
+    if abs(ϕ[1]) < 1e-10  # north pole: use L'Hôpital limits
+        EN[1] = (dr_dϕ[1] ^ 2 + r[1] ^ 2) * (r[1] * EN_lim - 2. * dr_dθ_div_sinϕ ^ 2 - r[1] ^ 2)
+        GL[1] = (dr_dθ_div_sinϕ ^ 2 + r[1] ^ 2) * (r[1] * d²r_dϕ²[1] - 2. * dr_dϕ[1] ^ 2 - r[1] ^ 2)
+        FM[1] = dr_dϕ[1] * dr_dθ_div_sinϕ * (-2. * dr_dϕ[1] * dr_dθ_div_sinϕ + 0.)
+    else    # scalar call away from north pole (single element vector)
+        sinϕ1 = sin(ϕ[1])
+        drdθ_sinϕ1 = dr_dθ[1] / sinϕ1
+        EN[1] = (dr_dϕ[1] ^ 2 + r[1] ^ 2) * (r[1] * d²r_dθ²[1] / sinϕ1 ^ 2 +
+                                               r[1] * dr_dϕ[1] * cos(ϕ[1]) / sinϕ1 -
+                                               2. * drdθ_sinϕ1 ^ 2 - r[1] ^ 2)
+        GL[1] = (drdθ_sinϕ1 ^ 2 + r[1] ^ 2) * (r[1] * d²r_dϕ²[1] - 2. * dr_dϕ[1] ^ 2 - r[1] ^ 2)
+        FM[1] = dr_dϕ[1] * drdθ_sinϕ1 * (-2. * dr_dϕ[1] * drdθ_sinϕ1 +
+                                           r[1] * d²r_dϕdθ[1] / sinϕ1 -
+                                           r[1] * dr_dθ[1] * cos(ϕ[1]) / sinϕ1 ^ 2)
+    end
 
-    κ = ((EN + GL - 2. * FM) / dS * r) / (dS .^ 2)
+    κ = ((EN .+ GL .- 2. .* FM) ./ dS .* r) ./ (dS .^ 2)
 
     return κ
 end
