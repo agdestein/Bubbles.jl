@@ -212,7 +212,6 @@ function convectiondiffusion_nonconstant_SH!(f, u, sdf, setup)
         # dens = (1 - a) * densities.liquid + a * densities.gas
         # visc = dens / ((1 - a) * densities.liquid / viscosities.liquid + a * densities.gas / viscosities.gas)
         # f[II] += conv + visc * diff
-        return nothing
     end
     return nothing
 end
@@ -249,27 +248,6 @@ function compute_fractions_SH!(fractions, sdf, Bub, Precomp_SH, setup)
     end
     return nothing
 end
-
-# function face_inv_density!(invρ_face, fractions, setup)
-#     (; Iu) = setup
-#     (; densities) = getparams()
-#     fill!(invρ_face, 0)
-
-#     AK.foreachindex(invρ_face) do ilin
-#         II = CartesianIndices(invρ_face)[ilin]
-#         i, j, k, dim = II.I
-#         I = CartesianIndex(i, j, k)
-#         I in Iu[dim] || return nothing
-
-#         I_right = right(I, dim)
-#         a_face = (fractions[I] + fractions[I_right]) / 2
-#         ρ_face = (1 - a_face) * densities.liquid + a_face * densities.gas
-#         invρ_face[II] = 1 / ρ_face
-#         return nothing
-#     end
-
-#     return nothing
-# end
 
 """
 Apply the variable-coefficient pressure operator on `p` and write the result to `Ap`.
@@ -609,6 +587,48 @@ function psolver_cg_matrix_variable_ρ(setup, ρ_eff; kwargs...)
     end
 end
 
+function poisson_var_ρ_mat!(p, jumps, ρ_eff, setup, u, a, dt, stage)
+    (; Ip) = setup
+
+    Rinv = Diagonal(vec(adapt(Array, 1 ./ ρ_eff)))
+    jump_vec = vec(adapt(Array, jumps))
+
+    P = NS.pad_scalarfield_mat(setup); Bp = NS.bc_p_mat(setup)
+    Bu = NS.bc_u_mat(setup); G = NS.pressuregradient_mat(setup)
+    M = NS.divergence_mat(setup); Ω = NS.volume_mat(setup)
+
+    # RHS:
+    u_vec = vec(adapt(Array, u))
+    div_jump = P' * Ω * M * Rinv * jump_vec
+    rhs = (P' * Ω * M * Bu * u_vec) ./ (a[stage] * dt) .+ div_jump
+
+    println("min, max ρ_eff: $(minimum(ρ_eff)), $(maximum(ρ_eff))")
+    println("min, max jump: $(minimum(jump_vec)), $(maximum(jump_vec))")
+
+    # check: jump divergence should be zero-mean:
+    @info "jump divergence mean:" abs(sum(div_jump))
+    @info "1e-10 * norm:" 1e-10 * norm(div_jump)
+    @assert abs(sum(div_jump)) < 1e-10 * norm(div_jump) "jump not zero-mean, sign error?"
+
+    # load rhs to p over Ip:
+    copyto!(view(p, Ip), rhs)
+    psolver = psolver_cg_matrix_variable_ρ(setup, ρ_eff; abstol = 1e-10, reltol = 1e-8, maxiter = 1000)
+    psolver(p)
+
+    return Bu, G, Bp, P, Rinv, jump_vec
+end
+
+function project_var_ρ_mat!(u, p, Bu, G, Bp, P, Rinv, jump_vec, setup, a, dt, stage)
+    (; N, dimension, Ip) = setup 
+    D = dimension()
+
+    u_vec = vec(adapt(Array, u))
+    p_vec = vec(view(p, Ip))
+    gp = Bu * G * Bp * P * p_vec # gradient on velocity grid, without jump 
+    corr = Rinv * (gp .- jump_vec)
+    u .= reshape(u_vec .- (a[stage] * dt) .* corr, N..., D)
+    return nothing
+end
 
 """
 Perform one time step for the total state `U = (; u, x)`, where
@@ -664,39 +684,11 @@ function rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH)
         @. U.u = U0.u + a[i] * dt * F.u
         NS.apply_bc_u!(U.u, t, setup)
 
-        ################## pressure solve and projection to enforce divergence-freeness:
-        # Rinv = inv_ρ_eff_mat(setup, ρ_eff)
-        Rinv = Diagonal(vec(adapt(Array, 1 ./ ρ_eff)))
-        # jump_vec = assemble_face_vector(setup, jumps)
-        jump_vec = vec(adapt(Array, jumps))
+        ################## pressure solve:
+        Bu, G, Bp, P, Rinv, jump_vec = poisson_var_ρ_mat!(p, jumps, ρ_eff, setup, U.u, a, dt, i)
 
-        P = NS.pad_scalarfield_mat(setup); Bp = NS.bc_p_mat(setup)
-        Bu = NS.bc_u_mat(setup); G = NS.pressuregradient_mat(setup)
-        M = NS.divergence_mat(setup); Ω = NS.volume_mat(setup)
-
-        # RHS:
-        # u_vec = assemble_face_vector(setup, U.u)
-        u_vec = vec(adapt(Array, U.u))
-        rhs = (P' * Ω * M * Bu * u_vec) ./ (a[i] * dt) .+ (P' * Ω * M * Rinv * jump_vec)
-
-        println("min, max ρ_eff: $(minimum(ρ_eff)), $(maximum(ρ_eff))")
-        println("min, max jump: $(minimum(jump_vec)), $(maximum(jump_vec))")
-
-        # check: jump divergence should be zero-mean:
-        @info "jump divergence:" abs(sum(P' * Ω * M * Rinv * jump_vec))
-        @info "1e-10 * norm:" 1e-10 * norm(P' * Ω * M * Rinv * jump_vec)
-        @assert abs(sum(P' * Ω * M * Rinv * jump_vec)) < 1e-10 * norm(P' * Ω * M * Rinv * jump_vec) "jump not zero-mean, sign error?"
-
-        # load rhs to p over Ip:
-        copyto!(view(p, Ip), rhs)
-        psolver = psolver_cg_matrix_variable_ρ(setup, ρ_eff; abstol = 1e-10, reltol = 1e-8, maxiter = 1000)
-        psolver(p)
-
-        # velocity projection:
-        p_vec = vec(view(p, Ip))
-        gp = Bu * G * Bp * P * p_vec # gradient on velocity grid, without jump 
-        corr = Rinv * (gp .- jump_vec)
-        U.u .= reshape(u_vec .- (a[i] * dt) .* corr, N..., D)
+        # velocity projection to ensure divergence free-ness:
+        project_var_ρ_mat!(U.u, p, Bu, G, Bp, P, Rinv, jump_vec, setup, a, dt, i)
         ##################################################################################
 
         # div_pre_l2, div_pre_linf = divergence_stats!(divbuf, U.u, setup)
