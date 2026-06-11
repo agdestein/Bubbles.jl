@@ -12,6 +12,7 @@ using StaticArrays
 using SparseArrays
 import AcceleratedKernels as AK
 
+using Interpolations
 
 getparams() = (;
     gravity = (0.0, 0.0, -9.81),
@@ -27,7 +28,7 @@ getparams() = (;
 
     # Time integration
     # dt = 0.5e-3,
-    dt = 0.05,
+    dt = 0.001,
     nsubstep = 1, # Steps between plot updates
     nstep = 200,
 )
@@ -88,6 +89,40 @@ function map_surface_tension!(Fu, setup, surf_tension, r, ϕ, θ, Bub, fractions
     end
 
     return nothing
+end
+
+function map_velocity_cubic(u, setup, xcub, ycub, zcub)
+    (; xp) = setup 
+    # staggered coordinates (drop leading ghost point to make length equal to xp[dim]):
+    xu = setup.x[1][2:end], setup.x[2][2:end], setup.x[3][2:end]
+
+    # bring data to host (CPU, needed by Interpolations.jl):
+    u_h = Array(u)
+    xc = Array(xcub); yc = Array(ycub); zc = Array(zcub)
+
+    # Interpolations.jl's cubic spline needs Abstractrange: this function converts the coordinate vectors:
+    asrange(v) = range(first(v), last(v), length = length(v))
+    Xu1, Xu2, Xu3 = asrange(xu[1]), asrange(xu[2]), asrange(xu[3])
+    Xp1, Xp2, Xp3 = asrange(xp[1]), asrange(xp[2]), asrange(xp[3])
+
+    # cubic interpolants for each velocity component, on staggered grid, clamped to boundary value (Flat):
+    itp1 = cubic_spline_interpolation((Xu1, Xp2, Xp3), @view(u_h[:, :, :, 1]);
+                                        extrapolation_bc = Flat())
+    itp2 = cubic_spline_interpolation((Xp1, Xu2, Xp3), @view(u_h[:, :, :, 2]);
+                                        extrapolation_bc = Flat())
+    itp3 = cubic_spline_interpolation((Xp1, Xp2, Xu3), @view(u_h[:, :, :, 3]);
+                                        extrapolation_bc = Flat())
+    ncub = length(xc)
+    ucub = zeros(Float64, ncub, 3)
+    @inbounds for i in 1:ncub   # cheap, work is in making the above interpolants
+        x1, x2, x3 = xc[i], yc[i], zc[i]
+        ucub[i, 1] = itp1(x1, x2, x3)
+        ucub[i, 2] = itp2(x1, x2, x3)
+        ucub[i, 3] = itp3(x1, x2, x3)
+    end
+
+    return ucub
+
 end
 
 function map_velocity(u, setup, xcub, ycub, zcub)
@@ -308,11 +343,11 @@ Updates `Lp`: L_ρ p = Ωₚ D(ρ⁻¹ ∇p)
 function Laplacian_var_ρ(Lp, p, ρ_eff, flux, setup)
     T = eltype(p)
     fill!(Lp, 0)
-    NS.apply_bc_p!(p, T(0), setup)
+    NS.apply_bc_p!(p, T(0), setup)      # fill ghost cells based on boundary conditions
     poisson_flux_var_ρ!(flux, p, ρ_eff, nothing, setup; usejump = false)    # jump lives in RHS
     NS.divergence!(Lp, flux, setup)
     NS.scalewithvolume!(Lp, setup)
-    NS.apply_bc_p!(Lp, T(0), setup)
+    # NS.apply_bc_p!(Lp, T(0), setup)   # breaks symmetry, detrimental to conjugate gradient
     return nothing
 end
 
@@ -333,14 +368,20 @@ Base.size(op::PoissonOp_var_ρ, d::Integer) = size(op)[d]
 function LinearAlgebra.mul!(yv, op::PoissonOp_var_ρ, xv)
     T = eltype(op.q)
     x = reshape(xv, size(op.q))
-    y = reshape(yv, size(op.Lq))
-    copyto!(op.q, x)
+    y = reshape(yv, size(op.Lq))    # view aliasing yv
+
+    fill!(op.q, 0.0)    # ensures boundary entries are 0 for symmetry
+    # copyto!(op.q, x)
+    copyto!(view(op.q, op.setup.Ip), view(x, op.setup.Ip))  # only interior points
     zero_mean_Ip!(op.q, op.setup.Ip)
-    NS.apply_bc_p!(op.q, T(0), op.setup)
+
     Laplacian_var_ρ(op.Lq, op.q, op.ρ_eff, op.flux, op.setup)
-    zero_mean_Ip!(op.Lq, op.setup.Ip)
-    copyto!(yv, op.Lq)
-    return yv
+
+    fill!(y, 0.0)
+    copyto!(view(y, op.setup.Ip), view(op.Lq, op.setup.Ip))  # only interior points
+    zero_mean_Ip!(y, op.setup.Ip)   # enforce zero-mean on output (was wrongly applied to Lq)
+
+    return yv   # aliases y
 end
 
 "RHS of Poisson equation: 1 / (a dt) Ωₚ D u* + Ωₚ D (ρ⁻¹ jumps)"
@@ -391,15 +432,37 @@ function poisson_and_project_var_ρ!(u, jumps, ρ_eff, adt, setup; p, scr, stage
     poisson_rhs_var_ρ!(rhs, div_jump, jump_flux, u, ρ_eff, jumps, adt, setup)
     zero_mean_Ip!(rhs, Ip)
 
-    copyto!(reshape(bv, size(rhs)), rhs)
+    @show sum(view(rhs, Ip)) / length(view(rhs, Ip))  # should be ~0 (zero-mean)
+    @show abs(sum(view(div_jump, Ip)))                # should be ~0
+
+    # Only copy interior entries to bv: ghost entries of rhs are nonzero (set by
+    # NS.apply_bc_p! reflection) but the operator zeroes ghost DOFs, making
+    # A xv = bv inconsistent if ghost values of bv are nonzero → CG diverges.
+    fill!(bv, 0)
+    copyto!(view(reshape(bv, size(rhs)), Ip), view(rhs, Ip))
     fill!(xv, 0)
     op = PoissonOp_var_ρ(setup, ρ_eff, flux, q, Lq)
+
+    # symmetry test for matrix-free operator:
+    Lx = similar(op.q |> vec)   # result vector
+    Ly = similar(Lx)            # result vector
+    T = eltype(op.q); n = size(op, 1)
+    x = randn(T, n); y = randn(T, n)
+    x = adapt(typeof(vec(op.q)), x)
+    y = adapt(typeof(vec(op.q)), y)
+    mul!(Ly, op, y)
+    mul!(Lx, op, x)
+    left = dot(x, Ly); right = dot(Lx, y)
+    @info "symmetry check (adjoint):" abs(left-right) / max(abs(left), abs(right))
 
     _, hist = IS.cg!(xv, op, bv; abstol = T(1e-12), reltol = T(1e-8), maxiter = 1000, log=true)
 
     copyto!(p, reshape(xv, size(p)))
     zero_mean_Ip!(p, Ip)
     NS.apply_bc_p!(p, T(0), setup)
+
+    poisson_flux_var_ρ!(flux, p, ρ_eff, jumps, setup; usejump = true)  # ρ⁻¹(∇p − j)
+    @show maximum(abs, flux)   # should be ~0 everywhere for a static sphere
 
     project_var_ρ!(u, p, ρ_eff, jumps, adt, flux, setup)
     NS.apply_bc_u!(u, zero(T), setup)
@@ -413,12 +476,82 @@ function poisson_and_project_var_ρ!(u, jumps, ρ_eff, adt, setup; p, scr, stage
     return nothing
 end
 
-function p_jump!(jumps, ρ_eff, sdf, Bub, Precomp_SH, setup)
-    (; Iu, Δu) = setup
+function potential_and_var_ρ!(ψ, ρ_eff, sdf, Bub, Precomp_SH, setup)
+    (; Iu) = setup
     (; densities) = getparams()
 
-    fill!(jumps, 0.0)
+    # fill!(jumps, 0.0)
+    fill!(ψ, 0.0)   # should be zero outside bubble
     fill!(ρ_eff, densities.liquid)  # for boundary values (I **not** in Iu[dim])
+
+    AK.foreachindex(ψ) do idx
+        I = CartesianIndices(ψ)[idx]
+        i, j, k = I.I
+        if sdf[I] < 0   # inside bubble
+            # closest surface point along normal direction (normal pointing out of bubble):
+            xc = (setup.xp[1][i] - Bub.centr[1], setup.xp[2][j] - Bub.centr[2], setup.xp[3][k] - Bub.centr[3])
+            _, ϕ_surf, θ_surf = cart2spc(xc...)
+            (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero) = get_SH_der2(maximum(Precomp_SH.ℓs), ϕ_surf, θ_surf)
+            Precomp_SH_temp = (; ϕ = [ϕ_surf], θ = [θ_surf], Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero)
+            Dynamic_SH_temp = Y2r(Bub, Precomp_SH_temp)
+
+            dS = surface_element(Precomp_SH_temp, Dynamic_SH_temp)
+            # κ = surface_curvature(Precomp_SH_temp, Dynamic_SH_temp, dS)[1]  # vector to scalar
+            κ = -2.
+
+            ψ[I] = - Bub.σ * κ
+        end
+        return nothing
+    end
+
+    AK.foreachindex(ρ_eff) do ilin
+        II = CartesianIndices(ρ_eff)[ilin]
+        i, j, k, dim = II.I
+        I = CartesianIndex(i, j, k)
+        I in Iu[dim] || return nothing
+
+        # u_point = setup.xu[dim][dim][II.I[dim]]
+        frac_left = abs(sdf[I]) / (abs(sdf[I]) + abs(sdf[right(I,dim,1)]))
+        ρ_left = (sdf[I] < 0) ? densities.gas : densities.liquid
+        ρ_right = (sdf[right(I,dim,1)] < 0) ? densities.gas : densities.liquid
+        ρ_eff[II] = ρ_left * frac_left + ρ_right * (1 - frac_left)
+
+        # if u_point > 0 && u_point < maximum(setup.x[dim]) && sdf[i,j,k] * sdf[right(I,dim,1)] < 0
+        #     x_surf = [setup.xu[dim][1][i], setup.xu[dim][2][j], setup.xu[dim][3][k]]
+        #     frac_left = abs(sdf[I]) / (abs(sdf[I]) + abs(sdf[right(I,dim,1)]))
+        #     x_surf[dim] = setup.xp[dim][II.I[dim]] + frac_left * (setup.xp[dim][II.I[dim]+1] - setup.xp[dim][II.I[dim]]) 
+
+        #     _, ϕ_surf, θ_surf = cart2spc(x_surf[1] - Bub.centr[1], x_surf[2] - Bub.centr[2], x_surf[3] - Bub.centr[3])
+        #     (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero) = get_SH_der2(maximum(Precomp_SH.ℓs), ϕ_surf, θ_surf)
+        #     Precomp_SH_temp = (; ϕ = [ϕ_surf], θ = [θ_surf], Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero)
+        #     Dynamic_SH_temp = Y2r(Bub, Precomp_SH_temp)
+
+        #     dS = surface_element(Precomp_SH_temp, Dynamic_SH_temp)
+        #     κ = surface_curvature(Precomp_SH_temp, Dynamic_SH_temp, dS)[1]  # vector to scalar
+
+        #     left_inside = sdf[I] < 0
+        #     ρ_eff[II] = left_inside * (frac_left * densities.gas + (1 - frac_left) * densities.liquid) + 
+        #             (1 - left_inside) * (frac_left * densities.liquid + (1 - frac_left) * densities.gas)
+        #     p_jump = - Bub.σ * κ / Δu[dim][II.I[dim]]
+        #     jumps[II] = left_inside ? - p_jump : p_jump # signs consistent with ∇p, **not** -∇p
+
+        # else
+        #     frac_left = abs(sdf[I]) / (abs(sdf[I]) + abs(sdf[right(I,dim,1)]))
+        #     ρ_left = (sdf[I] < 0) ? densities.gas : densities.liquid
+        #     ρ_right = (sdf[right(I,dim,1)] < 0) ? densities.gas : densities.liquid
+        #     @assert ρ_left == ρ_right "interface should not cross, left, right = $((ρ_left, ρ_right))"
+        #     ρ_eff[II] = ρ_left
+        # end
+
+        return nothing
+    end
+
+    # println("ρ_eff min, max: $(minimum(ρ_eff)), $(maximum(ρ_eff))")
+    return nothing
+end
+
+function p_jump!(jumps, ψ, setup)
+    (; Iu, Δu) = setup
 
     AK.foreachindex(jumps) do ilin
         II = CartesianIndices(jumps)[ilin]
@@ -426,38 +559,9 @@ function p_jump!(jumps, ρ_eff, sdf, Bub, Precomp_SH, setup)
         I = CartesianIndex(i, j, k)
         I in Iu[dim] || return nothing
 
-        u_point = setup.xu[dim][dim][II.I[dim]]
-        
-        if u_point > 0 && u_point < maximum(setup.x[dim]) && sdf[i,j,k] * sdf[right(I,dim,1)] < 0
-            x_surf = [setup.xu[dim][1][i], setup.xu[dim][2][j], setup.xu[dim][3][k]]
-            frac_left = abs(sdf[I]) / (abs(sdf[I]) + abs(sdf[right(I,dim,1)]))
-            x_surf[dim] = setup.xp[dim][II.I[dim]] + frac_left * (setup.xp[dim][II.I[dim]+1] - setup.xp[dim][II.I[dim]]) 
-
-            _, ϕ_surf, θ_surf = cart2spc(x_surf[1] - Bub.centr[1], x_surf[2] - Bub.centr[2], x_surf[3] - Bub.centr[3])
-            (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero) = get_SH_der2(maximum(Precomp_SH.ℓs), ϕ_surf, θ_surf)
-            Precomp_SH_temp = (; ϕ = [ϕ_surf], θ = [θ_surf], Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero)
-            Dynamic_SH_temp = Y2r(Bub, Precomp_SH_temp)
-
-            dS = surface_element(Precomp_SH_temp, Dynamic_SH_temp)
-            κ = surface_curvature(Precomp_SH_temp, Dynamic_SH_temp, dS)[1]  # vector to scalar
-
-            left_inside = sdf[I] < 0
-            ρ_eff[II] = left_inside * (frac_left * densities.gas + (1 - frac_left) * densities.liquid) + 
-                    (1 - left_inside) * (frac_left * densities.liquid + (1 - frac_left) * densities.gas)
-            p_jump = - Bub.σ * κ / Δu[dim][II.I[dim]]
-            jumps[II] = left_inside ? - p_jump : p_jump # signs consistent with ∇p, **not** -∇p
-
-        else
-            frac_left = abs(sdf[I]) / (abs(sdf[I]) + abs(sdf[right(I,dim,1)]))
-            ρ_left = (sdf[I] < 0) ? densities.gas : densities.liquid
-            ρ_right = (sdf[right(I,dim,1)] < 0) ? densities.gas : densities.liquid
-            @assert ρ_left == ρ_right "interface should not cross, left, right = $((ρ_left, ρ_right))"
-            ρ_eff[II] = ρ_left
-        end
+        jumps[II] = (ψ[right(I,dim,1)] - ψ[I]) / Δu[dim][II.I[dim]]
         return nothing
     end
-
-    # println("ρ_eff min, max: $(minimum(ρ_eff)), $(maximum(ρ_eff))")
     return nothing
 end
 
@@ -603,7 +707,7 @@ function poisson_var_ρ_mat!(p, jumps, ρ_eff, setup, u, a, dt, stage)
 
     # load rhs to p over Ip:
     copyto!(view(p, Ip), rhs)
-    psolver = psolver_cg_matrix_variable_ρ(setup, ρ_eff; abstol = 1e-10, reltol = 1e-8, maxiter = 1000)
+    psolver = psolver_cg_matrix_variable_ρ(setup, ρ_eff; abstol = 1e-12, reltol = 1e-12, maxiter = 1000)
     psolver(p)
 
     return Bu, G, Bp, P, Rinv, jump_vec
@@ -621,7 +725,7 @@ function project_var_ρ_mat!(u, p, Bu, G, Bp, P, Rinv, jump_vec, setup, a, dt, s
     return nothing
 end
 
-function rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_H; ρ_eff, jumps, scr)
+function rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_H; ρ_eff, jumps, ψ, scr)
     # RK coefficients
     a = 8 / 15, 5 / 12, 3 / 4
     b = 1 / 4, 0.0
@@ -635,7 +739,7 @@ function rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_H; 
     t0 = t 
     foreach(copyto!, U0, U)
 
-    @info "#Julia threads:" Threads.nthreads()
+    # @info "#Julia threads:" Threads.nthreads()
 
     # RK3 substeps:
     for i in 1:nstage
@@ -648,7 +752,8 @@ function rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_H; 
         fill!(F.u, 0)           # Initialize with 0
         convectiondiffusion_nonconstant_SH!(F.u, U.u, sdf, setup) # This adds to existing force
 
-        p_jump!(jumps, ρ_eff, sdf, Bub, Precomp_SH, setup)
+        potential_and_var_ρ!(ψ, ρ_eff, sdf, Bub, Precomp_SH, setup)
+        p_jump!(jumps, ψ, setup)
 
         # apply_effective_gravity!(F.u, fractions, setup)
 
@@ -657,6 +762,7 @@ function rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_H; 
         ycub .= ycub .+ Bub.centr[2]
         zcub .= zcub .+ Bub.centr[3] 
         u_cub = map_velocity(U.u, setup, xcub, ycub, zcub)
+        # u_cub = map_velocity_cubic(U.u, setup, xcub, ycub, zcub)
         dc_dt, dcentr_dt = time_step(Bub, Precomp_SH, Dynamic_SH, u_cub)
 
         # Evolve U: flow field (without pressure gradient and jump in momentum equation)
@@ -837,6 +943,7 @@ function solveandplot(u, Bub, setup, Precomp_SH, L)
     sdf = NS.scalarfield(setup)         # <0 if cell center (pressure point) inside bubble, >0 if outside 
     ρ_eff = similar(u)      # effective face density for variable-ρ Poisson solve
     jumps = similar(u)      # pressure jump at faces for variable-ρ Poisson solve
+    ψ = similar(p)
     scr = (;
         rhs = similar(p),
         div_jump = similar(p),
@@ -870,7 +977,7 @@ function solveandplot(u, Bub, setup, Precomp_SH, L)
         for isub in 1:nsubstep
             # Perform one RK3 step of step size `dt`
             # rk3step_SH_mat!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH)
-            rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH; ρ_eff, jumps, scr)
+            rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH; ρ_eff, jumps, ψ, scr)
             t += dt
             @info "bubble centroid = $(Bub.centr), mean z-velocity = $(sum(U.u[:, :, :, 3])/(3*size(U.u)[1]))"
 
