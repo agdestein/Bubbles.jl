@@ -275,7 +275,7 @@ function northpole(Bub, Precomp_SH)
     c = Bub.c 
     ℓs, one, mone, zero, θ = Precomp_SH.ℓs, Precomp_SH.one, Precomp_SH.mone, Precomp_SH.zero, Precomp_SH.θ
 
-    dr_dθ_div_sinϕ = sum(K_lone.(ℓs[one]) .* ℓs[one] .* (ℓs[one] .+ 1) / 2. .* c[one] * sin(θ[1]) - 
+    dr_dθ_div_sinϕ = sqrt(2) * sum(K_lone.(ℓs[one]) .* ℓs[one] .* (ℓs[one] .+ 1) / 2. .* c[one] * sin(θ[1]) - 
                         K_lone.(ℓs[mone]) .* ℓs[mone] .* (ℓs[mone] .+ 1) / 2. .* c[mone] * cos(θ[1]))
     # d²r_dθ²_div_sinϕ = sum(K_lone.(ℓs[one]) .* ℓs[one] .* (ℓs[one] .+ 1) / 2. .* c[one] * cos(θ[1]) +
     #                     K_lone.(ℓs[mone]) .* ℓs[mone] .* (ℓs[mone] .+ 1) / 2. .* c[mone] * sin(θ[1]))
