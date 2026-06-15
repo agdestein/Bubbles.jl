@@ -18,6 +18,7 @@ SphericalHarmonicModes = "0e9554e2-b38b-11e9-16d7-9d9abfec665a"
 SphericalHarmonics = "c489a379-e885-57ff-9236-bd896d33c250"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 WGLMakie = "276b4fcb-3e11-5398-bf8b-a0c2d153d008"
+WriteVTK = "64499a7a-5c06-52f2-abe2-ccb03c286192"
 
 [compat]
 AcceleratedKernels = "0.4"
@@ -34,4 +35,5 @@ SphericalHarmonicModes = "0.4.16"
 SphericalHarmonics = "0.1.20"
 StaticArrays = "1"
 WGLMakie = "0.13"
+WriteVTK = "1.21.2"
 julia = "1.10"

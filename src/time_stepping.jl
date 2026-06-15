@@ -16,8 +16,8 @@ import AcceleratedKernels as AK
 using Interpolations
 
 getparams() = (;
-    gravity = (0.0, 0.0, -9.81),
-    # gravity = (0.0, 0.0, 0.0),
+    # gravity = (0.0, 0.0, -9.81),
+    gravity = (0.0, 0.0, 0.0),
     # densities = (; liquid = 1.0e3, gas = 1.25),
     # densities = (; liquid = 1.0, gas = 1e-3),
     # viscosities = (; liquid = 1.0e-3, gas = 1.8e-5),
@@ -217,7 +217,39 @@ function apply_effective_gravity!(f, fractions, setup)
     end
 end
 
-function convectiondiffusion_nonconstant_SH!(f, u, sdf, setup)
+@inline μ(sdf, viscosities, densities) = 
+    sdf < 0 ? viscosities.gas * densities.gas : viscosities.liquid * densities.liquid
+
+@inline ρ(sdf, densities) = 
+    sdf < 0 ? densities.gas : densities.liquid
+
+@inline function corner_θ_surf(sdf00, sdf10, sdf01, sdf11, Δ)
+    sdf_eff = (sdf00 + sdf10 + sdf01 + sdf11) / 4.
+    # If sdf_eff > Δ/2, corner 'cell' is fully outside bubble: liquid (0.0)
+    # If sdf_eff < -Δ/2, corner 'cell' is fully inside bubble: gas (1.0)
+    # Linear in between
+    clamp(0.5 - sdf_eff / Δ, 0.0, 1.0)
+end
+
+@inline function diffstress_var_ρ(setup, u, sdf, viscosities, densities, i, j, I)
+    if i == j  # μ at cell center I
+        μ_eff = μ(sdf[I], viscosities, densities)   # build dynamic viscosity from kinematic and density
+    else
+        sdf00 = sdf[I]
+        sdf10 = sdf[right(I, i)]
+        sdf01 = sdf[right(I, j)]
+        sdf11 = sdf[right(right(I, i), j)]
+        # Assumes uniform grid:
+        θ_surf = corner_θ_surf(sdf00, sdf10, sdf01, sdf11, setup.Δ[i][I[i]])
+        # Harmonic dynamic viscosity averaging (at corner):
+        μ_eff = 1.0 / (θ_surf/(viscosities.gas * densities.gas) + (1 - θ_surf)/(viscosities.liquid * densities.liquid))
+        # μ_eff = θ_surf * viscosities.gas * densities.gas + (1 - θ_surf) * viscosities.liquid * densities.liquid
+    end
+    # Symmetric stress: ∂uᵢ/∂xⱼ + ∂uⱼ/∂xᵢ
+    - μ_eff * (NS.δ(setup, u, i, j, I) + NS.δ(setup, u, j, i, I))
+end
+
+function convectiondiffusion_nonconstant_SH!(f, u, sdf, ρ_eff, setup)
     (; Iu) = setup
     (; viscosities, densities) = getparams()
     AK.foreachindex(f) do ilin
@@ -230,22 +262,27 @@ function convectiondiffusion_nonconstant_SH!(f, u, sdf, setup)
             NS.tensordivergence(setup, NS.convstress, (setup, u), dim, 2, I) +
             NS.tensordivergence(setup, NS.convstress, (setup, u), dim, 3, I)
         diff =
-            NS.tensordivergence(setup, NS.diffstress, (setup, u, 1.0), dim, 1, I) +
-            NS.tensordivergence(setup, NS.diffstress, (setup, u, 1.0), dim, 2, I) + 
-            NS.tensordivergence(setup, NS.diffstress, (setup, u, 1.0), dim, 3, I)
+            # NS.tensordivergence(setup, NS.diffstress, (setup, u, 1.0), dim, 1, I) +
+            # NS.tensordivergence(setup, NS.diffstress, (setup, u, 1.0), dim, 2, I) + 
+            # NS.tensordivergence(setup, NS.diffstress, (setup, u, 1.0), dim, 3, I)
+            NS.tensordivergence(setup, diffstress_var_ρ, (setup, u, sdf, viscosities, densities), dim, 1, I) +
+            NS.tensordivergence(setup, diffstress_var_ρ, (setup, u, sdf, viscosities, densities), dim, 2, I) + 
+            NS.tensordivergence(setup, diffstress_var_ρ, (setup, u, sdf, viscosities, densities), dim, 3, I)
 
-        frac_left = abs(sdf[I]) / (abs(sdf[I]) + abs(sdf[right(I,dim,1)]))
-        left_inside = sdf[I] < 0
-        right_inside = sdf[right(I,dim,1)] < 0
-        ν_left = [viscosities.liquid, viscosities.gas][left_inside + 1]
-        ν_right = [viscosities.liquid, viscosities.gas][right_inside + 1]
-        ν_eff = frac_left * ν_left + (1 - frac_left) * ν_right
+        # frac_left = abs(sdf[I]) / (abs(sdf[I]) + abs(sdf[right(I,dim,1)]))
+        # left_inside = sdf[I] < 0
+        # right_inside = sdf[right(I,dim,1)] < 0
+        # ν_left = [viscosities.liquid, viscosities.gas][left_inside + 1]
+        # ν_right = [viscosities.liquid, viscosities.gas][right_inside + 1]
+        # ν_eff = frac_left * ν_left + (1 - frac_left) * ν_right
+
+
 
         # ρ_eff = left_inside * (frac_left * densities.gas + (1 - frac_left) * densities.liquid) + 
         #         (1 - left_inside) * (frac_left * densities.liquid + (1 - frac_left) * densities.gas)
         # ν_eff = left_inside * (frac_left * viscosities.gas + (1 - frac_left) * viscosities.liquid) + 
         #         (1 - left_inside) * (frac_left * viscosities.liquid + (1 - frac_left) * viscosities.gas)
-        f[II] += conv + ν_eff * diff
+        f[II] += conv + diff / ρ_eff[II]
 
         # a = (fractions[I] + fractions[right(I, dim, 1)]) / 2 # Interpolate to velocity point
         # dens = (1 - a) * densities.liquid + a * densities.gas
@@ -507,7 +544,7 @@ function poisson_and_project_var_ρ!(u, jumps, ρ_eff, adt, setup; p, scr, stage
     # println("finished preconditioner build")
     # _, hist = IS.cg!(xv, op, bv; Pl = Pl, abstol = T(1e-12), reltol = T(1e-8), maxiter = 1000, log=true)
 
-    _, hist = IS.cg!(xv, op, bv; abstol = T(1e-12), reltol = T(1e-8), maxiter = 1000, log=true)
+    _, hist = IS.cg!(xv, op, bv; abstol = T(1e-12), reltol = T(1e-10), maxiter = 2000, log=true)
 
     copyto!(p, reshape(xv, size(p)))
     zero_mean_Ip!(p, Ip)
@@ -652,10 +689,11 @@ function rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH;
 
         # Apply right-hand side function to current state U, put in F
         compute_fractions_SH!(fractions, sdf, Bub, Precomp_SH, setup) # Current phase fractions
-        fill!(F.u, 0)           # Initialize with 0
-        convectiondiffusion_nonconstant_SH!(F.u, U.u, sdf, setup) # This adds to existing force
-
         potential_and_var_ρ!(ψ, jumps, ρ_eff, sdf, Bub, Precomp_SH, setup)
+
+        fill!(F.u, 0)           # Initialize with 0
+        convectiondiffusion_nonconstant_SH!(F.u, U.u, sdf, ρ_eff, setup) # This adds to existing force
+
         # p_jump!(jumps, ψ, setup)
 
         # apply_effective_gravity!(F.u, fractions, setup)
@@ -664,8 +702,8 @@ function rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH;
         xcub .= xcub .+ Bub.centr[1]
         ycub .= ycub .+ Bub.centr[2]
         zcub .= zcub .+ Bub.centr[3] 
-        u_cub = map_velocity(U.u, setup, xcub, ycub, zcub)
-        # u_cub = map_velocity_cubic(U.u, setup, xcub, ycub, zcub)
+        # u_cub = map_velocity(U.u, setup, xcub, ycub, zcub)
+        u_cub = map_velocity_cubic(U.u, setup, xcub, ycub, zcub)
         dc_dt, dcentr_dt = time_step(Bub, Precomp_SH, Dynamic_SH, u_cub)
 
         # Evolve U: flow field (without pressure gradient and jump in momentum equation)
@@ -745,8 +783,8 @@ function solveandplot(u, Bub, setup, Precomp_SH, L, visualize=false)
     params = getparams()
     (; dt, nsubstep, nstep) = params
     vtk_every = 5
-    vtk_dir = joinpath("output", "vtk")
-    bubble_log_path = joinpath("output", "bubble", "bubble_history.txt")
+    vtk_dir = joinpath("output", "vtk2")
+    bubble_log_path = joinpath("output", "bubble2", "bubble_history.txt")
     flow_centered_series = Vector{Tuple{Float64,String}}()
     staggered_x_series = Vector{Tuple{Float64,String}}()
     staggered_y_series = Vector{Tuple{Float64,String}}()
