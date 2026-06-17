@@ -3,6 +3,7 @@ using Makie, WGLMakie
 import IncompressibleNavierStokes as NS
 include("SH.jl")    # import source code
 include("logging.jl")
+include("RK4.jl")
 const IS = NS.IterativeSolvers
 
 using Adapt
@@ -24,12 +25,14 @@ getparams() = (;
 
     # densities = (; liquid = 1e3, gas = 1.25),
     # viscosities = (; liquid = 1e-6, gas = 1.44e-5),  # kinematic!
-    densities = (; liquid = 0.1, gas = 100.0/500.),
-    viscosities = (; liquid = 1e-5, gas = 0.35e-2),  # kinematic!
+    # densities = (; liquid = 0.1, gas = 100.0/500.),
+    densities = (; liquid = 0.1, gas = 0.1),
+    # viscosities = (; liquid = 1e-5, gas = 0.35e-2),  # kinematic!
+    viscosities = (; liquid = 1e-6, gas = 1e-6),
 
     # Time integration
     # dt = 0.5e-3,
-    dt = 0.0001,
+    dt = 0.0005,
     nsubstep = 1, # Steps between plot updates
     nstep = 10000,
 )
@@ -511,8 +514,8 @@ function poisson_and_project_var_ρ!(u, jumps, ρ_eff, adt, setup; p, scr, stage
     poisson_rhs_var_ρ!(rhs, div_jump, jump_flux, u, ρ_eff, jumps, adt, setup)
     zero_mean_Ip!(rhs, Ip)
 
-    @show sum(view(rhs, Ip)) / length(view(rhs, Ip))  # should be ~0 (zero-mean)
-    @show abs(sum(view(div_jump, Ip)))                # should be ~0
+    # @show sum(view(rhs, Ip)) / length(view(rhs, Ip))  # should be ~0 (zero-mean)
+    # @show abs(sum(view(div_jump, Ip)))                # should be ~0
 
     # Only copy interior entries to bv: ghost entries of rhs are nonzero (set by
     # NS.apply_bc_p! reflection) but the operator zeroes ghost DOFs, making
@@ -531,8 +534,8 @@ function poisson_and_project_var_ρ!(u, jumps, ρ_eff, adt, setup; p, scr, stage
     y = adapt(typeof(vec(op.q)), y)
     mul!(Ly, op, y)
     mul!(Lx, op, x)
-    left = dot(x, Ly); right = dot(Lx, y)
-    @info "symmetry check (adjoint):" abs(left-right) / max(abs(left), abs(right))
+    left_check = dot(x, Ly); right_check = dot(Lx, y)
+    @info "symmetry check (adjoint):" abs(left_check-right_check) / max(abs(left_check), abs(right_check))
 
     # ######## Jacobi preconditioner:
     # diag_d = poisson_diagonal_var_ρ(ρ_eff, setup)
@@ -551,7 +554,7 @@ function poisson_and_project_var_ρ!(u, jumps, ρ_eff, adt, setup; p, scr, stage
     NS.apply_bc_p!(p, T(0), setup)
 
     poisson_flux_var_ρ!(flux, p, ρ_eff, jumps, setup; usejump = true)  # ρ⁻¹(∇p − j)
-    @show maximum(abs, flux)   # should be ~0 everywhere for a static sphere
+    # @show maximum(abs, flux)   # should be ~0 everywhere for a static sphere
 
     project_var_ρ!(u, p, ρ_eff, jumps, adt, flux, setup)
     NS.apply_bc_u!(u, zero(T), setup)
@@ -559,7 +562,7 @@ function poisson_and_project_var_ρ!(u, jumps, ρ_eff, adt, setup; p, scr, stage
     div_post_l2, div_post_linf = divergence_stats!(divbuf, u, setup)
 
     # report convergence of conjugate gradient:
-    cg_res = isempty(hist[:resnorm]) ? T(Nan) : last(hist[:resnorm])
+    cg_res = isempty(hist[:resnorm]) ? T(NaN) : last(hist[:resnorm])
     cg_iters = hist.iters
     @info "projection" stage=stage cg_iters = cg_iters cg_converged = hist.isconverged cg_resnorm = cg_res div_pre_l2 = div_pre_l2 div_post_l2 = div_post_l2 div_pre_linf = div_pre_linf div_post_linf = div_post_linf
     return nothing
@@ -599,24 +602,46 @@ function potential_and_var_ρ!(ψ, jumps, ρ_eff, sdf, Bub, Precomp_SH, setup)
         I = CartesianIndex(i, j, k)
         I in Iu[dim] || return nothing
 
-        frac_left = abs(sdf[I]) / (abs(sdf[I]) + abs(sdf[right(I,dim,1)]))
-        ρ_left = (sdf[I] < 0) ? densities.gas : densities.liquid
-        ρ_right = (sdf[right(I,dim,1)] < 0) ? densities.gas : densities.liquid
-        ρ_eff[II] = ρ_left * frac_left + ρ_right * (1 - frac_left)
+        # frac_left = abs(sdf[I]) / (abs(sdf[I]) + abs(sdf[right(I,dim,1)]))
+        # ρ_left = (sdf[I] < 0) ? densities.gas : densities.liquid
+        # ρ_right = (sdf[right(I,dim,1)] < 0) ? densities.gas : densities.liquid
+        # ρ_eff[II] = ρ_left * frac_left + ρ_right * (1 - frac_left)
 
         u_point = setup.xu[dim][dim][II.I[dim]]
         if u_point > 0 && u_point < maximum(setup.x[dim]) && sdf[i,j,k] * sdf[right(I,dim,1)] < 0
-            x_surf = [setup.xu[dim][1][i], setup.xu[dim][2][j], setup.xu[dim][3][k]]
-            frac_left = abs(sdf[I]) / (abs(sdf[I]) + abs(sdf[right(I,dim,1)]))
-            x_surf[dim] = setup.xp[dim][II.I[dim]] + frac_left * (setup.xp[dim][II.I[dim]+1] - setup.xp[dim][II.I[dim]]) 
+            # x_surf = [setup.xu[dim][1][i], setup.xu[dim][2][j], setup.xu[dim][3][k]]
+            # frac_left = abs(sdf[I]) / (abs(sdf[I]) + abs(sdf[right(I,dim,1)]))
+            # x_surf[dim] = setup.xp[dim][II.I[dim]] + frac_left * (setup.xp[dim][II.I[dim]+1] - setup.xp[dim][II.I[dim]]) 
 
+            # _, ϕ_surf, θ_surf = cart2spc(x_surf[1] - Bub.centr[1], x_surf[2] - Bub.centr[2], x_surf[3] - Bub.centr[3])
+            
+            # bisection search parallel to dimension axis:
+            x_low = [setup.xu[dim][1][i], setup.xu[dim][2][j], setup.xu[dim][3][k]]
+            x_high = copy(x_low)
+            x_low[dim] = setup.xp[dim][II.I[dim]]
+            x_high[dim] = setup.xp[dim][II.I[dim]+1]
+
+            for _ in 1:30
+                x_mid = (x_low .+ x_high) ./ 2
+                # if low and mid both on same side of interface: move low up
+                if (sdf[I] < 0) == check_if_inside_SH(x_mid, Bub, Precomp_SH)[1]
+                    x_low = x_mid
+                else
+                    x_high = x_mid
+                end
+            end
+
+            x_surf = (x_low .+ x_high) ./ 2
             _, ϕ_surf, θ_surf = cart2spc(x_surf[1] - Bub.centr[1], x_surf[2] - Bub.centr[2], x_surf[3] - Bub.centr[3])
+
             (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero) = get_SH_der2(maximum(Precomp_SH.ℓs), ϕ_surf, θ_surf)
             Precomp_SH_temp = (; ϕ = [ϕ_surf], θ = [θ_surf], Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero)
             Dynamic_SH_temp = Y2r(Bub, Precomp_SH_temp)
 
             dS = surface_element(Precomp_SH_temp, Dynamic_SH_temp)
             κ = surface_curvature(Precomp_SH_temp, Dynamic_SH_temp, dS)[1]  # vector to scalar
+
+            frac_left = (x_surf[dim] - setup.xp[dim][II.I[dim]]) / (setup.xp[dim][II.I[dim]+1] - setup.xp[dim][II.I[dim]])
 
             left_inside = sdf[I] < 0
             ρ_eff[II] = left_inside * (frac_left * densities.gas + (1 - frac_left) * densities.liquid) + 
@@ -625,7 +650,7 @@ function potential_and_var_ρ!(ψ, jumps, ρ_eff, sdf, Bub, Precomp_SH, setup)
             jumps[II] = left_inside ? - p_jump : p_jump # signs consistent with ∇p, **not** -∇p
 
         else
-            frac_left = abs(sdf[I]) / (abs(sdf[I]) + abs(sdf[right(I,dim,1)]))
+            # frac_left = abs(sdf[I]) / (abs(sdf[I]) + abs(sdf[right(I,dim,1)]))
             ρ_left = (sdf[I] < 0) ? densities.gas : densities.liquid
             ρ_right = (sdf[right(I,dim,1)] < 0) ? densities.gas : densities.liquid
             @assert ρ_left == ρ_right "interface should not cross, left, right = $((ρ_left, ρ_right))"
@@ -638,6 +663,31 @@ function potential_and_var_ρ!(ψ, jumps, ρ_eff, sdf, Bub, Precomp_SH, setup)
     # println("ρ_eff min, max: $(minimum(ρ_eff)), $(maximum(ρ_eff))")
     return nothing
 end
+
+function count_cut_corners(sdf, fractions, setup)
+    (; Iu) = setup
+    cut = similar(fractions)
+    interface = similar(fractions)
+    fill!(cut, 0.0); fill!(interface, 0.0)
+
+    AK.foreachindex(fractions) do index
+        I = CartesianIndices(fractions)[index]
+        if fractions[I] > 0 && fractions[I] < 1
+            interface[I] = 1.0
+            for dim in 1:3
+                if I in Iu[dim] && sdf[I] * sdf[right(I, dim, 1)] < 0
+                    cut[I] = 1.0
+                    break
+                elseif left(I,dim) in Iu[dim] && sdf[I] * sdf[left(I, dim, 1)] < 0
+                    cut[I] = 1.0
+                    break
+                end
+            end
+        end
+    end
+    return sum(cut), sum(interface)
+end
+
 
 function p_jump!(jumps, ψ, setup)
     (; Iu, Δu) = setup
@@ -671,6 +721,7 @@ function rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH;
     b = 1 / 4, 0.0
     rk_c = 0.0, 8 / 15, 2 / 3
     nstage = length(a)
+    V_target = Bub.V
 
     # (; Ip, dimension, N) = setup
     # D = dimension()
@@ -685,11 +736,32 @@ function rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH;
     for i in 1:nstage
         Dynamic_SH = Y2r(Bub, Precomp_SH)
         println("coefs: $(Bub.c)")
-        println("volume: $(volume(Dynamic_SH))")
+        vol = volume(Dynamic_SH)
+        println("volume: $(vol)")
 
         # Apply right-hand side function to current state U, put in F
         compute_fractions_SH!(fractions, sdf, Bub, Precomp_SH, setup) # Current phase fractions
         potential_and_var_ρ!(ψ, jumps, ρ_eff, sdf, Bub, Precomp_SH, setup)
+
+        # let
+        #     crossing = falses(size(ρ_eff))
+        #     for idx_II in CartesianIndices(ρ_eff)
+        #         idx_i,idx_j,idx_k,idx_dim = idx_II.I; idx_I = CartesianIndex(idx_i,idx_j,idx_k)
+        #         idx_I in setup.Iu[idx_dim] || continue
+        #         if sdf[idx_I]*sdf[right(idx_I,idx_dim)] < 0
+        #             crossing[idx_II] = true
+        #         end
+        #     end
+        #     @show extrema(ρ_eff[crossing])          # should span [ρ_in, ρ_out] = [0.1, 0.2] (with swap)
+        #     @show sum(ρ_eff[crossing])/count(crossing)
+        #     # bulk check:
+        #     @show ρ_eff[ findfirst(x->sdf[x]<0, CartesianIndices(sdf)), 1 ]  # interior face: should be ρ_drop
+        #     @show ρ_eff[ findfirst(x->sdf[x]<0, CartesianIndices(sdf)), 2 ]  # interior face: should be ρ_drop
+        #     @show ρ_eff[ findfirst(x->sdf[x]<0, CartesianIndices(sdf)), 3 ]  # interior face: should be ρ_drop
+        # end
+
+        # cut, tot = count_cut_corners(sdf, fractions, setup)
+        # @info "cut corners" cut = cut tot = tot
 
         fill!(F.u, 0)           # Initialize with 0
         convectiondiffusion_nonconstant_SH!(F.u, U.u, sdf, ρ_eff, setup) # This adds to existing force
@@ -698,22 +770,75 @@ function rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH;
 
         # apply_effective_gravity!(F.u, fractions, setup)
 
+        #####################################################
+        # xcub, ycub, zcub = spc2cart(Dynamic_SH.r, Precomp_SH.ϕ, Precomp_SH.θ)
+        # xcub .= xcub .+ Bub.centr[1]
+        # ycub .= ycub .+ Bub.centr[2]
+        # zcub .= zcub .+ Bub.centr[3] 
+        # # u_cub = map_velocity(U.u, setup, xcub, ycub, zcub)
+        # u_cub = map_velocity_cubic(U.u, setup, xcub, ycub, zcub)
+        # dc_dt, dcentr_dt = time_step(Bub, Precomp_SH, Dynamic_SH, u_cub, vol)
+
+        # # Evolve U: flow field (without pressure gradient and jump in momentum equation)
+        # t = t0 + rk_c[i] * dt
+        # @. U.u = U0.u + a[i] * dt * F.u
+        # NS.apply_bc_u!(U.u, t, setup)
+
+        # ################## matrix-free pressure solve and velocity projection:
+        # poisson_and_project_var_ρ!(U.u, jumps, ρ_eff, a[i]*dt, setup; p, scr, stage = i)
+        # ##################################################################################
+
+        # # u_cub = map_velocity_cubic(U.u, setup, xcub, ycub, zcub)
+        # # dc_dt, dcentr_dt = time_step(Bub, Precomp_SH, Dynamic_SH, u_cub, vol)
+
+        # # div_pre_l2, div_pre_linf = divergence_stats!(divbuf, U.u, setup)
+        # # u_before_proj = copy(U.u)
+        # # proj_stats = project_vd!(U.u, sdf, jumps, dt, setup; psolver, p)
+        # # div_post_l2, div_post_linf = divergence_stats!(divbuf, U.u, setup)
+        # # du_proj = U.u .- u_before_proj
+        # # du_proj_l2 = sqrt(sum(abs2, du_proj))
+        # # @info "divergence monitor" stage = i pre_l2 = div_pre_l2 pre_linf = div_pre_linf post_l2 = div_post_l2 post_linf = div_post_linf solver_iter = proj_stats.iter solver_rr0 = proj_stats.rr0 solver_rr = proj_stats.rr proj_method = proj_stats.method solver_converged = proj_stats.converged du_proj_l2 = du_proj_l2
+        
+        # # Evolve U: bubble
+        # @. U.c = U0.c + a[i] * dt * dc_dt
+        # @. U.centr = U0.centr + a[i] * dt * dcentr_dt
+
+        # # Evolve U0
+        # # Skip for last iter
+        # if i < nstage
+        #     @. U0.u += b[i] * dt * F.u
+        #     @. U0.c += b[i] * dt * dc_dt
+        #     @. U0.centr += b[i] * dt * dcentr_dt
+        # end
+
+        # # Fill boundary values at new time
+        # NS.apply_bc_u!(U.u, t, setup)
+        ###############################################
+
         xcub, ycub, zcub = spc2cart(Dynamic_SH.r, Precomp_SH.ϕ, Precomp_SH.θ)
         xcub .= xcub .+ Bub.centr[1]
         ycub .= ycub .+ Bub.centr[2]
         zcub .= zcub .+ Bub.centr[3] 
-        # u_cub = map_velocity(U.u, setup, xcub, ycub, zcub)
+        u_cub = map_velocity(U.u, setup, xcub, ycub, zcub)
         u_cub = map_velocity_cubic(U.u, setup, xcub, ycub, zcub)
-        dc_dt, dcentr_dt = time_step(Bub, Precomp_SH, Dynamic_SH, u_cub)
+        dc_dt, dcentr_dt = time_step(Bub, Precomp_SH, Dynamic_SH, u_cub, vol)
 
         # Evolve U: flow field (without pressure gradient and jump in momentum equation)
         t = t0 + rk_c[i] * dt
-        @. U.u = U0.u + a[i] * dt * F.u
+        @. U.u = U0.u + a[i] * dt * F.u # U0.u does not include pressure jump effects and not div-free!
         NS.apply_bc_u!(U.u, t, setup)
 
         ################## matrix-free pressure solve and velocity projection:
         poisson_and_project_var_ρ!(U.u, jumps, ρ_eff, a[i]*dt, setup; p, scr, stage = i)
         ##################################################################################
+        NS.apply_bc_u!(U.u, t, setup)
+
+        # xcub, ycub, zcub = spc2cart(Dynamic_SH.r, Precomp_SH.ϕ, Precomp_SH.θ)
+        # xcub .= xcub .+ Bub.centr[1]
+        # ycub .= ycub .+ Bub.centr[2]
+        # zcub .= zcub .+ Bub.centr[3] 
+        # u_cub = map_velocity_cubic(U.u, setup, xcub, ycub, zcub)
+        # dc_dt, dcentr_dt = time_step(Bub, Precomp_SH, Dynamic_SH, u_cub, vol)
 
         # div_pre_l2, div_pre_linf = divergence_stats!(divbuf, U.u, setup)
         # u_before_proj = copy(U.u)
@@ -730,17 +855,26 @@ function rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH;
         # Evolve U0
         # Skip for last iter
         if i < nstage
-            @. U0.u += b[i] * dt * F.u
+            # @U0.U += b[i] * dt * F.u
+            # Use the projected stage increment so U0 carries pressure/jump effects too.
+            @. U0.u += (b[i] / a[i]) * (U.u - U0.u)
             @. U0.c += b[i] * dt * dc_dt
             @. U0.centr += b[i] * dt * dcentr_dt
         end
 
         # Fill boundary values at new time
-        NS.apply_bc_u!(U.u, t, setup)
+        
     end
 
     # Full time step
     t = t0 + dt
+
+    # Enforce volume conservation by uniformly rescaling SH coefficients.
+    # vol_new = volume(Y2r(Bub, Precomp_SH))
+    # if vol_new > 0
+    #     scale = (V_target / vol_new)^(1 / 3)
+    #     @. U.c *= scale
+    # end
 
     return nothing
 end
@@ -783,8 +917,8 @@ function solveandplot(u, Bub, setup, Precomp_SH, L, visualize=false)
     params = getparams()
     (; dt, nsubstep, nstep) = params
     vtk_every = 5
-    vtk_dir = joinpath("output", "vtk2")
-    bubble_log_path = joinpath("output", "bubble2", "bubble_history.txt")
+    vtk_dir = joinpath("output", "vtk12")
+    bubble_log_path = joinpath("output", "bubble12", "bubble_history.txt")
     flow_centered_series = Vector{Tuple{Float64,String}}()
     staggered_x_series = Vector{Tuple{Float64,String}}()
     staggered_y_series = Vector{Tuple{Float64,String}}()
@@ -841,6 +975,7 @@ function solveandplot(u, Bub, setup, Precomp_SH, L, visualize=false)
             # Perform one RK3 step of step size `dt`
             # rk3step_SH_mat!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH)
             rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH; ρ_eff, jumps, ψ, scr)
+            # rk4_sh!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH; ρ_eff, jumps, ψ, scr)
             t += dt
             @info "bubble centroid = $(Bub.centr), mean z-velocity = $(sum(U.u[:, :, :, 3])/(3*size(U.u)[1]))"
 
