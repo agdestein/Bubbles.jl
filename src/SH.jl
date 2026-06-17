@@ -227,13 +227,13 @@ function bubble_setup(ncub, ℓₘ, R, σ, L)
     # Oscillating drop test case (Lamb, 1932):
     c[7] = sin(5e-3)    # ℓ=2, m=0
 
-    centr = [L/2, L/2, L/2]           # centroid position 
-    V = 4. / 3. * π * R^3               # total bubble volume
-    Bub = (; c, centr, V, σ)
-
     # Precomputed spherical harmonics (derivatives) at spherical design cubature points:
     (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero) = get_SH_der2(ℓₘ, ϕ, θ)
     Precomp_SH = (; ϕ, θ, Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero)
+
+    centr = [L/2, L/2, L/2]           # centroid position
+    V = volume(Y2r((; c), Precomp_SH)) # total bubble volume from current SH shape
+    Bub = (; c, centr, V, σ)
 
     return Bub, Precomp_SH
 end
@@ -500,10 +500,10 @@ Perform one explicit time (sub-)step of a translating and deforming bubble descr
 - u: shape (npoints, 3); velocity field interpolated to spherical design cubature points (ϕ, θ) relative to centroid.
 Returns update of coefficients 'dc_dt' and of centroid '[u_centr_x, u_centr_y, u_centr_z]'.
 """
-function time_step(Bub, Precomp_SH, Dynamic_SH, u)
+function time_step(Bub, Precomp_SH, Dynamic_SH, u, V)
     r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ = Dynamic_SH.r, Dynamic_SH.dr_dϕ, Dynamic_SH.dr_dθ, Dynamic_SH.dr_dθ_div_sinϕ
     ϕ, θ, ℓs, one, mone, Y = Precomp_SH.ϕ, Precomp_SH.θ, Precomp_SH.ℓs, Precomp_SH.one, Precomp_SH.mone, Precomp_SH.Y
-    c, V = Bub.c, Bub.V
+    c = Bub.c
     npoints = length(ϕ)
 
     # Bubble centroid velocity:
@@ -512,8 +512,8 @@ function time_step(Bub, Precomp_SH, Dynamic_SH, u)
                     r.^2 .* u[:, 3] .* (r .* cos.(ϕ) + dr_dϕ .* sin.(ϕ))
     u_centr[2:end] .= u_centr[2:end] + r[2:end].^2 .* (u[2:end, 1] .* dr_dθ[2:end] .* sin.(θ[2:end]) ./ sin.(ϕ[2:end]) - 
                                                 u[2:end, 2] .* dr_dθ[2:end] .* cos.(θ[2:end]) ./ sin.(ϕ[2:end]))
-    dr_dθ_div_sinϕ = sqrt(2.) * sum(K_lone.(ℓs[one]) .* ℓs[one] .* (ℓs[one] .+ 1) / 2. .* c[one] * sin(θ[1]) - 
-                        K_lone.(ℓs[mone]) .* ℓs[mone] .* (ℓs[mone] .+ 1) / 2. .* c[mone] * cos(θ[1]))
+    # dr_dθ_div_sinϕ = sqrt(2.) * sum(K_lone.(ℓs[one]) .* ℓs[one] .* (ℓs[one] .+ 1) / 2. .* c[one] * sin(θ[1]) - 
+    #                     K_lone.(ℓs[mone]) .* ℓs[mone] .* (ℓs[mone] .+ 1) / 2. .* c[mone] * cos(θ[1]))
     # println(dr_dθ_div_sinϕ)
     u_centr[1] = u_centr[1] + r[1]^2 * (u[1, 1] * dr_dθ_div_sinϕ * sin(θ[1]) - 
                                         u[1, 2] * dr_dθ_div_sinϕ * cos(θ[1]))
