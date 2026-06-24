@@ -144,6 +144,7 @@ function get_SH_der2(ℓₘ, ϕ, θ)
     ms = last.(modes)               # m values, in storage order
     pos = findall(m -> m > 0, ms); neg = findall(m -> m < 0, ms); zero = findall(m -> m == 0, ms)
     one = findall(m -> m == 1, ms); mone = findall(m -> m == -1, ms)
+    two = findall(m -> m == 2, ms); mtwo = findall(m -> m == -2, ms)
     nonneg = findall(m -> m >= 0, ms); ms_nonneg = ms[nonneg]
     nonneg_pos = findall(m -> m > 0, ms_nonneg); nonneg_zero = findall(m -> m == 0, ms_nonneg)
 
@@ -213,7 +214,7 @@ function get_SH_der2(ℓₘ, ϕ, θ)
                         P[:, clamp.(nonneg_pos .- 2, 1, (ℓₘ * (ℓₘ + 1)) ÷ 2 .+ ℓₘ .+ 1)] .* (ms[pos] .!= 1)'
         ) / 4.
 
-    return (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero)
+    return (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero, two, mtwo)
 end
 
 function bubble_setup(ncub, ℓₘ, R, σ, L)
@@ -228,8 +229,8 @@ function bubble_setup(ncub, ℓₘ, R, σ, L)
     c[7] = sin(5e-3)    # ℓ=2, m=0
 
     # Precomputed spherical harmonics (derivatives) at spherical design cubature points:
-    (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero) = get_SH_der2(ℓₘ, ϕ, θ)
-    Precomp_SH = (; ϕ, θ, Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero)
+    (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero, two, mtwo) = get_SH_der2(ℓₘ, ϕ, θ)
+    Precomp_SH = (; ϕ, θ, Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero, two, mtwo)
 
     centr = [L/2, L/2, L/2]           # centroid position
     V = volume(Y2r((; c), Precomp_SH)) # total bubble volume from current SH shape
@@ -240,6 +241,11 @@ end
 
 function fit_coefs_LS(Y, r)
     c = Y \ r
+    return c
+end
+
+function fit_coefs_orth(Y, r)
+    c = 4π/length(r) * (Y' * r) # Y has size (N, #basis functions), r has size (N)
     return c
 end
 
@@ -255,6 +261,10 @@ Evaluate spherical harmonic normalization constant for all degrees ℓ at order 
 """
 function K_lone(ℓ)
     return sqrt.((2. * ℓ .+ 1)/(4. * π) ./ (ℓ .* (ℓ .+ 1)))
+end
+
+function K_ltwo(ℓ)
+    return sqrt.((2. * ℓ .+ 1)/(4. * π) ./ (ℓ .* (ℓ .+ 1) .* (ℓ .- 1) .* (ℓ .+ 2)))
 end
 
 # function K_lmone(ℓ)
@@ -273,15 +283,22 @@ Evaluate relevant limits at singularities at the north pole (first spherical des
 """
 function northpole(Bub, Precomp_SH)
     c = Bub.c 
-    ℓs, one, mone, zero, θ = Precomp_SH.ℓs, Precomp_SH.one, Precomp_SH.mone, Precomp_SH.zero, Precomp_SH.θ
+    ℓs, one, mone, zero, two, mtwo, θ = Precomp_SH.ℓs, Precomp_SH.one, Precomp_SH.mone, Precomp_SH.zero, Precomp_SH.two, Precomp_SH.mtwo, Precomp_SH.θ
 
     dr_dθ_div_sinϕ = sqrt(2) * sum(K_lone.(ℓs[one]) .* ℓs[one] .* (ℓs[one] .+ 1) / 2. .* c[one] * sin(θ[1]) - 
                         K_lone.(ℓs[mone]) .* ℓs[mone] .* (ℓs[mone] .+ 1) / 2. .* c[mone] * cos(θ[1]))
     # d²r_dθ²_div_sinϕ = sum(K_lone.(ℓs[one]) .* ℓs[one] .* (ℓs[one] .+ 1) / 2. .* c[one] * cos(θ[1]) +
     #                     K_lone.(ℓs[mone]) .* ℓs[mone] .* (ℓs[mone] .+ 1) / 2. .* c[mone] * sin(θ[1]))
-    EN_lim = - sum(c[zero] .* K_lzero(ℓs[zero]) .* ℓs[zero] .* (ℓs[zero] .+ 1) / 2.)
+    EN_lim = - sum(c[zero] .* K_lzero(ℓs[zero]) .* ℓs[zero] .* (ℓs[zero] .+ 1) / 2.) - sqrt(2.0) * sum(
+        c[two] .* K_ltwo(ℓs[two]) .* (ℓs[two] .+ 2) .* (ℓs[two] .+ 1) .* ℓs[two] .* (ℓs[two] .- 1) / 4. .* cos(2. * θ[1])
+        + c[mtwo] .* K_ltwo(ℓs[mtwo]) .* (ℓs[mtwo] .+ 2) .* (ℓs[mtwo] .+ 1) .* ℓs[mtwo] .* (ℓs[mtwo] .- 1) / 4. .* sin(2. * θ[1])
+    )
+    FM_lim = sqrt(2.0) * sum(
+        - c[two] .* K_ltwo(ℓs[two]) .* (ℓs[two] .+ 2) .* (ℓs[two] .+ 1) .* ℓs[two] .* (ℓs[two] .- 1) / 4. .* sin(2. * θ[1])
+        + c[mtwo] .* K_ltwo(ℓs[mtwo]) .* (ℓs[mtwo] .+ 2) .* (ℓs[mtwo] .+ 1) .* ℓs[mtwo] .* (ℓs[mtwo] .- 1) / 4. .* cos(2. * θ[1])
+    )
     
-    return dr_dθ_div_sinϕ, EN_lim
+    return dr_dθ_div_sinϕ, EN_lim, FM_lim
 end
 
 function Y2r(Bub, Precomp_SH)
@@ -291,9 +308,9 @@ function Y2r(Bub, Precomp_SH)
     d²r_dϕ² = Precomp_SH.d²Y_dϕ² * Bub.c 
     d²r_dϕdθ = Precomp_SH.d²Y_dθdϕ * Bub.c 
     d²r_dθ² = Precomp_SH.d²Y_dθ² * Bub.c 
-    dr_dθ_div_sinϕ, EN_lim = northpole(Bub, Precomp_SH)
+    dr_dθ_div_sinϕ, EN_lim, FM_lim = northpole(Bub, Precomp_SH)
 
-    Dynamic_SH = (; r, dr_dϕ, dr_dθ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², dr_dθ_div_sinϕ, EN_lim)
+    Dynamic_SH = (; r, dr_dϕ, dr_dθ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², dr_dθ_div_sinϕ, EN_lim, FM_lim)
 
     return Dynamic_SH
 end
@@ -342,7 +359,7 @@ function surface_element(Precomp_SH, Dynamic_SH)
 
     dS = zeros(Float64, length(ϕ))
     dS[2:end] .= r[2:end] .* sqrt.(r[2:end] .^ 2 .+ dr_dϕ[2:end] .^ 2 .+ (dr_dθ[2:end] ./ sin.(ϕ[2:end])) .^ 2)
-    if abs(ϕ[1]) < 1e-10  # north pole: use L'Hôpital limit
+    if abs(ϕ[1]) < 1e-10  # north pole: use limit
         dS[1] = r[1] * sqrt(r[1] ^ 2 + dr_dϕ[1] ^ 2 + dr_dθ_div_sinϕ ^ 2)
     else    # scalar call (single element vector)
         dS[1] = r[1] * sqrt(r[1] ^ 2 + dr_dϕ[1] ^ 2 + (dr_dθ[1] / sin(ϕ[1])) ^ 2)
@@ -364,37 +381,71 @@ Evaluate twice the local mean curvature (2H = κ) at spherical design cubature p
 """
 function surface_curvature(Precomp_SH, Dynamic_SH, dS)
     ϕ = Precomp_SH.ϕ
-    (; r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², EN_lim) = Dynamic_SH
+    (; r, dr_dϕ, dr_dθ, dr_dθ_div_sinϕ, d²r_dϕ², d²r_dϕdθ, d²r_dθ², EN_lim, FM_lim) = Dynamic_SH
+
+    E = dr_dϕ.^2 .+ r.^2
+    F = dr_dϕ .* dr_dθ
+    G = dr_dθ.^2 .+ r.^2 .* sin.(ϕ).^2
+    denom = dS ./ r
+
+    M = similar(E)
+    L = (r .* d²r_dϕ² .- 2 .* dr_dϕ.^2 .- r.^2) ./ denom
+    N = (r .* d²r_dθ² .+ r.*dr_dϕ.*sin.(ϕ).*cos.(ϕ) .- 2 .* dr_dθ.^2 .- r.^2 .* sin.(ϕ).^2) ./ denom
+
+    EG_min_F²_div_sinϕ² = r.^2 .* denom.^2
+
+    EN_div_sinϕ² = similar(EG_min_F²_div_sinϕ²); GL_div_sinϕ² = similar(EN_div_sinϕ²); FM_div_sinϕ² = similar(EN_div_sinϕ²)
+    
 
     # All divided by sin²ϕ (both denominator and numerator):
-    EN = zeros(Float64, length(ϕ)); GL = similar(EN); FM = similar(EN)
-    EN[2:end] .= (dr_dϕ[2:end] .^ 2 .+ r[2:end] .^ 2) .* (r[2:end] .* d²r_dθ²[2:end] ./ (sin.(ϕ[2:end]) .^ 2) .+
-                                                           r[2:end] .* dr_dϕ[2:end] .* cos.(ϕ[2:end]) ./ sin.(ϕ[2:end]) .-
-                                                           2. .* (dr_dθ[2:end] ./ sin.(ϕ[2:end])) .^ 2 .-
-                                                           r[2:end] .^ 2)
-    GL[2:end] .= ((dr_dθ[2:end] ./ sin.(ϕ[2:end])) .^ 2 .+ r[2:end] .^ 2) .* (r[2:end] .* d²r_dϕ²[2:end] .-
-                                                                                 2. .* dr_dϕ[2:end] .^ 2 .-
-                                                                                 r[2:end] .^ 2)
-    FM[2:end] .= dr_dϕ[2:end] .* dr_dθ[2:end] ./ sin.(ϕ[2:end]) .* (-2. .* dr_dϕ[2:end] .* dr_dθ[2:end] ./ sin.(ϕ[2:end]) .+
-                                                                      r[2:end] .* d²r_dϕdθ[2:end] ./ sin.(ϕ[2:end]) .-
-                                                                      r[2:end] .* dr_dθ[2:end] .* cos.(ϕ[2:end]) ./ (sin.(ϕ[2:end]) .^ 2))
-    if abs(ϕ[1]) < 1e-10  # north pole: use L'Hôpital limits
-        EN[1] = (dr_dϕ[1] ^ 2 + r[1] ^ 2) * (r[1] * EN_lim - 2. * dr_dθ_div_sinϕ ^ 2 - r[1] ^ 2)
-        GL[1] = (dr_dθ_div_sinϕ ^ 2 + r[1] ^ 2) * (r[1] * d²r_dϕ²[1] - 2. * dr_dϕ[1] ^ 2 - r[1] ^ 2)
-        FM[1] = dr_dϕ[1] * dr_dθ_div_sinϕ * (-2. * dr_dϕ[1] * dr_dθ_div_sinϕ + 0.)
+    # EN = zeros(Float64, length(ϕ)); GL = similar(EN); FM = similar(EN)
+    # EN[2:end] .= (dr_dϕ[2:end] .^ 2 .+ r[2:end] .^ 2) .* (r[2:end] .* d²r_dθ²[2:end] ./ (sin.(ϕ[2:end]) .^ 2) .+
+    #                                                        r[2:end] .* dr_dϕ[2:end] .* cos.(ϕ[2:end]) ./ sin.(ϕ[2:end]) .-
+    #                                                        2. .* (dr_dθ[2:end] ./ sin.(ϕ[2:end])) .^ 2 .-
+    #                                                        r[2:end] .^ 2)
+    # GL[2:end] .= ((dr_dθ[2:end] ./ sin.(ϕ[2:end])) .^ 2 .+ r[2:end] .^ 2) .* (r[2:end] .* d²r_dϕ²[2:end] .-
+    #                                                                              2. .* dr_dϕ[2:end] .^ 2 .-
+    #                                                                              r[2:end] .^ 2)
+    # FM[2:end] .= dr_dϕ[2:end] .* dr_dθ[2:end] ./ sin.(ϕ[2:end]) .* (-2. .* dr_dϕ[2:end] .* dr_dθ[2:end] ./ sin.(ϕ[2:end]) .+
+    #                                                                   r[2:end] .* d²r_dϕdθ[2:end] ./ sin.(ϕ[2:end]) .-
+    #                                                                   r[2:end] .* dr_dθ[2:end] .* cos.(ϕ[2:end]) ./ (sin.(ϕ[2:end]) .^ 2))
+    if abs(ϕ[1]) < 1e-10  # north pole: use limits
+        M[2:end] .= (r[2:end] .* d²r_dϕdθ[2:end] .- 2 .* dr_dϕ[2:end] .* dr_dθ[2:end] 
+                - r[2:end] .* cos.(ϕ[2:end]) .* dr_dθ[2:end] ./ sin.(ϕ[2:end])) ./ denom[2:end]
+        M[1] = (r[1] * d²r_dϕdθ[1] - 2. * dr_dϕ[1] * dr_dθ[1] - r[1] * cos(ϕ[1]) * dr_dθ_div_sinϕ) / denom[1]
+        EN_div_sinϕ²[2:end] .= E[2:end] .* N[2:end] ./ sin.(ϕ[2:end]).^2
+        EN_div_sinϕ²[1] = E[1] * (r[1] * EN_lim - 2 * dr_dθ_div_sinϕ^2 - r[1]^2) / denom[1]
+        
+        GL_div_sinϕ²[2:end] .= G[2:end] .* L[2:end] ./ sin.(ϕ[2:end]).^2
+        GL_div_sinϕ²[1] = (dr_dθ_div_sinϕ^2 + r[1]^2) .* L[1]
+        
+        FM_div_sinϕ²[2:end] .= F[2:end] .* M[2:end] ./ sin.(ϕ[2:end]).^2
+        FM_div_sinϕ²[1] = dr_dϕ[1] * dr_dθ_div_sinϕ * (r[1] * FM_lim - 2 * dr_dϕ[1] * dr_dθ_div_sinϕ) / denom[1]
+
+        
+        # EN[1] = (dr_dϕ[1] ^ 2 + r[1] ^ 2) * (r[1] * EN_lim - 2. * dr_dθ_div_sinϕ ^ 2 - r[1] ^ 2)
+        # GL[1] = (dr_dθ_div_sinϕ ^ 2 + r[1] ^ 2) * (r[1] * d²r_dϕ²[1] - 2. * dr_dϕ[1] ^ 2 - r[1] ^ 2)
+        # FM[1] = dr_dϕ[1] * dr_dθ_div_sinϕ * (-2. * dr_dϕ[1] * dr_dθ_div_sinϕ + r[1] * FM_lim)
     else    # scalar call away from north pole (single element vector)
-        sinϕ1 = sin(ϕ[1])
-        drdθ_sinϕ1 = dr_dθ[1] / sinϕ1
-        EN[1] = (dr_dϕ[1] ^ 2 + r[1] ^ 2) * (r[1] * d²r_dθ²[1] / sinϕ1 ^ 2 +
-                                               r[1] * dr_dϕ[1] * cos(ϕ[1]) / sinϕ1 -
-                                               2. * drdθ_sinϕ1 ^ 2 - r[1] ^ 2)
-        GL[1] = (drdθ_sinϕ1 ^ 2 + r[1] ^ 2) * (r[1] * d²r_dϕ²[1] - 2. * dr_dϕ[1] ^ 2 - r[1] ^ 2)
-        FM[1] = dr_dϕ[1] * drdθ_sinϕ1 * (-2. * dr_dϕ[1] * drdθ_sinϕ1 +
-                                           r[1] * d²r_dϕdθ[1] / sinϕ1 -
-                                           r[1] * dr_dθ[1] * cos(ϕ[1]) / sinϕ1 ^ 2)
+        M[1] = (r[1] * d²r_dϕdθ[1] - 2. * dr_dϕ[1] * dr_dθ[1] - r[1] * cos(ϕ[1]) * dr_dθ[1] / sin(ϕ[1])) / denom[1]
+        EN_div_sinϕ²[1] = E[1] * N[1] / sin(ϕ[1])^2
+        GL_div_sinϕ²[1] = G[1] * L[1] / sin(ϕ[1])^2
+        FM_div_sinϕ²[1] = F[1] * M[1] / sin(ϕ[1])^2
+        
+        # sinϕ1 = sin(ϕ[1])
+        # drdθ_sinϕ1 = dr_dθ[1] / sinϕ1
+        # EN[1] = (dr_dϕ[1] ^ 2 + r[1] ^ 2) * (r[1] * d²r_dθ²[1] / sinϕ1 ^ 2 +
+        #                                        r[1] * dr_dϕ[1] * cos(ϕ[1]) / sinϕ1 -
+        #                                        2. * drdθ_sinϕ1 ^ 2 - r[1] ^ 2)
+        # GL[1] = (drdθ_sinϕ1 ^ 2 + r[1] ^ 2) * (r[1] * d²r_dϕ²[1] - 2. * dr_dϕ[1] ^ 2 - r[1] ^ 2)
+        # FM[1] = dr_dϕ[1] * drdθ_sinϕ1 * (-2. * dr_dϕ[1] * drdθ_sinϕ1 +
+        #                                    r[1] * d²r_dϕdθ[1] / sinϕ1 -
+        #                                    r[1] * dr_dθ[1] * cos(ϕ[1]) / sinϕ1 ^ 2)
     end
 
-    κ = ((EN .+ GL .- 2. .* FM) ./ dS .* r) ./ (dS .^ 2)
+    κ = (EN_div_sinϕ² .+ GL_div_sinϕ² - 2 .* FM_div_sinϕ²) ./ EG_min_F²_div_sinϕ²
+
+    # κ = ((EN .+ GL .- 2. .* FM) ./ dS .* r) ./ (dS .^ 2)
 
     return κ
 end
@@ -427,11 +478,11 @@ Compute the total pressure drop over a bubble, parametrized using spherical harm
 """
 function compute_p_drop(Precomp_SH, Dynamic_SH, σ)
     # Divided by sinϕ:
-    dS = surface_element.(Precomp_SH, Dynamic_SH)
+    dS = surface_element(Precomp_SH, Dynamic_SH)
 
     S = surface_area(dS, Precomp_SH.ϕ)
 
-    κ = surface_curvature.(Precomp_SH, Dynamic_SH, dS)
+    κ = surface_curvature(Precomp_SH, Dynamic_SH, dS)
 
     # println("Mean |FM|: $(sum(abs.(FM))/length(FM)), max: $(maximum(abs.(FM)))")
 

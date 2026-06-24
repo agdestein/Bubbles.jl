@@ -61,92 +61,120 @@ function p_jump_mat(f, sdf, Bub, Precomp_SH, setup)
 end
 
 ####### Matrix-based Poisson solver and velocity projection ################################################################
-function laplacian_mat_variable_ρ(setup, ρ_eff)
-    P = NS.pad_scalarfield_mat(setup)
-    Bp = NS.bc_p_mat(setup)
-    Bu = NS.bc_u_mat(setup)
-    G = NS.pressuregradient_mat(setup)
-    M = NS.divergence_mat(setup)
-    Ω = NS.volume_mat(setup)
-    # Rinv = inv_ρ_eff_mat(setup, ρ_eff)  # accounts for variable density
-    Rinv = Diagonal(vec(adapt(Array, 1 ./ ρ_eff)))  # accounts for variable density
-    return P' * Ω * M * Rinv * Bu * G * Bp * P
-end
+# function laplacian_mat_variable_ρ(setup, ρ_eff)
+#     P = NS.pad_scalarfield_mat(setup)
+#     Bp = NS.bc_p_mat(setup)
+#     Bu = NS.bc_u_mat(setup)
+#     G = NS.pressuregradient_mat(setup)
+#     M = NS.divergence_mat(setup)
+#     Ω = NS.volume_mat(setup)
+#     # Rinv = inv_ρ_eff_mat(setup, ρ_eff)  # accounts for variable density
+#     Rinv = Diagonal(vec(adapt(Array, 1 ./ ρ_eff)))  # accounts for variable density
+#     return P' * Ω * M * Rinv * Bu * G * Bp * P
+# end
 
-function psolver_cg_matrix_variable_ρ(setup, ρ_eff; kwargs...)
+function psolver_direct_matrix_variable_ρ(setup, Rinv, scr) # ; kwargs...
     (; x, Np, Ip, boundary_conditions, backend) = setup 
+    (; Left, Right, cache) = scr
     T = eltype(x[1])
-    L = laplacian_mat_variable_ρ(setup, ρ_eff)
+    Lp = Left * Rinv * Right
 
-    asymm = norm(L - L', 1)/norm(L, 1)  # relative asymmetry, check before using conjugate gradient
-    @info "Laplacian relative asymmetry" asymm
-    L0 = NS.laplacian_mat(setup) # original, non-variable ρ, for comparison
-    @assert sign(sum(diag(L))) == sign(sum(diag(L0))) "Laplacian has flipped definiteness"
+    # asymm = norm(Lp - Lp', 1)/norm(Lp, 1)  # relative asymmetry, check before using conjugate gradient
+    # @info "Laplacian relative asymmetry" asymm
+    # L0 = NS.laplacian_mat(setup) # original, non-variable ρ, for comparison
+    # @assert sign(sum(diag(Lp))) == sign(sum(diag(L0))) "Laplacian has flipped definiteness"
 
     isdefinite = any(bc -> bc[1] isa NS.PressureBC || bc[2] isa NS.PressureBC, boundary_conditions.u)
-    if isdefinite
-        ftemp = fill!(similar(x[1], prod(Np)), 0)
-        ptemp = fill!(similar(x[1], prod(Np)), 0)
-        viewrange = (:)
-    else
-        ftemp = fill!(similar(x[1], prod(Np) + 1), 0)
-        ptemp = fill!(similar(x[1], prod(Np) + 1), 0)
-        e = fill(T(1), prod(Np))
-        L = [L e; e' 0]
-        L = NS.sparseadapt(backend, L)
-        viewrange = 1:prod(Np)
-    end
+    ftemp = fill!(similar(x[1], prod(Np)), 0)
+    ptemp = fill!(similar(x[1], prod(Np)), 0)
+    needzeromean = !isdefinite
+    Lp = NS.sparseadapt(backend, Lp)
+    maximum(abs, Lp - Lp') < sqrt(eps(T)) * maximum(abs, Lp) || error("Matrix not symmetric")
+    Lp = @. (Lp + Lp') / 2
+    A = sparse(-Lp) # SPD form for CG
+
     function psolve!(p)
-        copyto!(view(ftemp, viewrange), view(view(p, Ip), :))
-        IS.cg!(ptemp, L, ftemp; kwargs...)
-        copyto!(view(view(p, Ip), :), view(ptemp, viewrange))
-        p
+        # RHS for CG is exactly the interior pressure RHS currently stored in p[Ip].
+        rhs_view = view(view(p, Ip), :)
+        copyto!(view(ftemp, :), rhs_view)
+        needzeromean && (ftemp .-= sum(ftemp) / length(ftemp))   # project onto range space
+
+        fill!(ptemp, zero(T))
+        @assert length(ftemp) == size(A, 1)
+        @assert length(rhs_view) == length(ftemp) "CG RHS length mismatch with interior pressure RHS"
+        println("Start CG solve")
+        _, hist = IS.cg!(
+            ptemp,
+            A,
+            ftemp;
+            Pl = cache.Pl,
+            abstol = T(1e-12),
+            reltol = T(1e-8),
+            maxiter = 1000,
+            log = true,
+        )
+        println("CG solve finished")
+        ptemp .*= -one(T)  # solve (-Lp) x = rhs -> physical pressure is p = -x
+        cache.n_calls += 1
+
+        needzeromean && (ptemp .-= sum(ptemp) / length(ptemp))   # zero-mean solution
+        copyto!(view(view(p, Ip), :), view(ptemp, :))
+        return hist
     end
 end
 
-function poisson_var_ρ_mat!(p, jumps, ρ_eff, setup, u, a, dt, stage)
+function poisson_var_ρ_mat!(p, jumps, ρ_eff, setup, u, a, dt, stage, scr)
     (; Ip) = setup
+    (; Left, Bu) = scr
 
     Rinv = Diagonal(vec(adapt(Array, 1 ./ ρ_eff)))
     jump_vec = vec(adapt(Array, jumps))
 
-    P = NS.pad_scalarfield_mat(setup); Bp = NS.bc_p_mat(setup)
-    Bu = NS.bc_u_mat(setup); G = NS.pressuregradient_mat(setup)
-    M = NS.divergence_mat(setup); Ω = NS.volume_mat(setup)
+    # P = NS.pad_scalarfield_mat(setup); Bp = NS.bc_p_mat(setup)
+    # Bu = NS.bc_u_mat(setup); G = NS.pressuregradient_mat(setup)
+    # M = NS.divergence_mat(setup); Ω = NS.volume_mat(setup)
 
     # RHS:
     u_vec = vec(adapt(Array, u))
-    div_jump = P' * Ω * M * Rinv * jump_vec
-    rhs = (P' * Ω * M * Bu * u_vec) ./ (a[stage] * dt) .+ div_jump
+    div_jump = Left * Rinv * jump_vec
+    rhs = (Left * Bu * u_vec) ./ (a[stage] * dt) .+ div_jump
 
-    println("min, max ρ_eff: $(minimum(ρ_eff)), $(maximum(ρ_eff))")
-    println("min, max jump: $(minimum(jump_vec)), $(maximum(jump_vec))")
+    # println("min, max ρ_eff: $(minimum(ρ_eff)), $(maximum(ρ_eff))")
+    # println("min, max jump: $(minimum(jump_vec)), $(maximum(jump_vec))")
 
-    # check: jump divergence should be zero-mean:
-    @info "jump divergence mean:" abs(sum(div_jump))
-    @info "1e-10 * norm:" 1e-10 * norm(div_jump)
-    @assert abs(sum(div_jump)) < 1e-10 * norm(div_jump) "jump not zero-mean, sign error?"
+    # # check: jump divergence should be zero-mean:
+    # @info "jump divergence mean:" abs(sum(div_jump))
+    # @info "1e-10 * norm:" 1e-10 * norm(div_jump)
+    # @assert abs(sum(div_jump)) < 1e-10 * norm(div_jump) "jump not zero-mean, sign error? (rhs must be orthogonal to nullspace of Lp: sum to zero over interior)"
 
     # load rhs to p over Ip:
+    @assert length(rhs) == length(setup.Ip)
     copyto!(view(p, Ip), rhs)
-    psolver = psolver_cg_matrix_variable_ρ(setup, ρ_eff; abstol = 1e-12, reltol = 1e-12, maxiter = 1000)
-    psolver(p)
+    psolver = psolver_direct_matrix_variable_ρ(setup, Rinv, scr)    # abstol = 1e-12, reltol = 1e-12, maxiter = 1000
+    hist = psolver(p)
 
-    return Bu, G, Bp, P, Rinv, jump_vec
+    return Rinv, jump_vec, hist
 end
 
-function project_var_ρ_mat!(u, p, Bu, G, Bp, P, Rinv, jump_vec, setup, a, dt, stage)
-    (; N, dimension, Ip) = setup 
-    D = dimension()
+# function project_var_ρ_mat!(u, p, Rinv, jump_vec, setup, a, dt, stage, scr)
+#     (; N, dimension, Ip) = setup 
+#     D = dimension()
+#     (; Right, gp) = scr
 
-    u_vec = vec(adapt(Array, u))
-    p_vec = vec(view(p, Ip))
-    gp = Bu * G * Bp * P * p_vec # gradient on velocity grid, without jump 
-    corr = Rinv * (gp .- jump_vec)
-    u .= reshape(u_vec .- (a[stage] * dt) .* corr, N..., D)
+#     # u_vec = vec(adapt(Array, u))
+#     # p_vec = vec(view(p, Ip))
+#     mul!(vec(gp), Right, vec(view(p, Ip))) # gradient on velocity grid, without jump
+#     println("Finished pressure gradient computation")
+#     # corr = Rinv * (gp .- jump_vec)
+#     u .= reshape(vec(u) .- (a[stage] * dt) .* (Rinv * (vec(gp) .- jump_vec)), N..., D)
+#     return nothing
+# end
+
+function project_var_ρ_mat!(u, p, ρ_eff, jumps, setup, a, dt, stage, scr)
+    (; flux) = scr
+    project_var_ρ!(u, p, ρ_eff, jumps, a[stage] * dt, flux, setup)
     return nothing
 end
-
 
 """
 Perform one time step for the total state `U = (; u, x)`, where
@@ -155,38 +183,42 @@ Wray's low-storage RK3 method is used, which only relies on two
 temporary registers `F` and `U0` (same size as `U`).
 In addition, we need a pressure register `p` and a surface tension register `tension`.
 """
-function rk3step_SH_mat!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH)
+function rk3step_SH_mat!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH; ρ_eff, jumps, ψ, scr)
     # RK coefficients
     a = 8 / 15, 5 / 12, 3 / 4
     b = 1 / 4, 0.0
     rk_c = 0.0, 8 / 15, 2 / 3
     nstage = length(a)
 
-    (; Ip, dimension, N) = setup
-    D = dimension()
+    # (; Ip, dimension, N) = setup
+    # D = dimension()
 
     # Update current solution
     t0 = t
     foreach(copyto!, U0, U)
-    # ρ_eff = similar(F.u)
+    divbuf = similar(p)
 
-    @info "#Julia threads:" Threads.nthreads()
+    # @info "#Julia threads:" Threads.nthreads()
 
     # RK3 substeps
     for i in 1:nstage
         Dynamic_SH = Y2r(Bub, Precomp_SH)
         println("coefs: $(Bub.c)")
-        println("volume: $(volume(Dynamic_SH))")
+        vol = volume(Dynamic_SH)
+        println("volume: $(vol)")
         # Apply right-hand side function to current state U, put in F
         compute_fractions_SH!(fractions, sdf, Bub, Precomp_SH, setup) # Current phase fractions
+
+        potential_and_var_ρ!(ψ, jumps, ρ_eff, sdf, Bub, Precomp_SH, setup)
+
         fill!(F.u, 0) # Initialize with 0
         # NS.convectiondiffusion!(F.u, U.u, setup, viscosity) # This adds to existing force
-        convectiondiffusion_nonconstant_SH!(F.u, U.u, sdf, setup) # This adds to existing force
+        convectiondiffusion_nonconstant_SH!(F.u, U.u, sdf, ρ_eff, setup) # This adds to existing force
         # NS.applypressure!(F.u, p, setup) # already inside `project!`
         # tension = surface_tension(Precomp_SH, Dynamic_SH, Bub.σ)
         # println(tension[1, 1:end])
 
-        jumps, ρ_eff = p_jump_mat(F.u, sdf, Bub, Precomp_SH, setup)
+        # jumps, ρ_eff = p_jump_mat(F.u, sdf, Bub, Precomp_SH, setup)
         # map_surface_tension!(F.u, setup, tension, Dynamic_SH.r, Precomp_SH.ϕ, Precomp_SH.θ, Bub, fractions)
         # applygravity!(F.u)
         # apply_effective_gravity!(F.u, fractions, setup)
@@ -194,20 +226,32 @@ function rk3step_SH_mat!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp
         xcub .= xcub .+ Bub.centr[1]
         ycub .= ycub .+ Bub.centr[2]
         zcub .= zcub .+ Bub.centr[3] 
-        u_cub = map_velocity(U.u, setup, xcub, ycub, zcub)
-        dc_dt, dcentr_dt = time_step(Bub, Precomp_SH, Dynamic_SH, u_cub)
+        # u_cub = map_velocity(U.u, setup, xcub, ycub, zcub)
+        u_cub = map_velocity_cubic(U.u, setup, xcub, ycub, zcub)
+        dc_dt, dcentr_dt = time_step(Bub, Precomp_SH, Dynamic_SH, u_cub, vol)
 
         # Evolve U: flow field
         t = t0 + rk_c[i] * dt
         @. U.u = U0.u + a[i] * dt * F.u
         NS.apply_bc_u!(U.u, t, setup)
+        div_pre_l2, div_pre_linf = divergence_stats!(divbuf, U.u, setup)
 
+
+        # BLAS.set_num_threads(6)
         ################## pressure solve:
-        Bu, G, Bp, P, Rinv, jump_vec = poisson_var_ρ_mat!(p, jumps, ρ_eff, setup, U.u, a, dt, i)
+        Rinv, jump_vec, hist = poisson_var_ρ_mat!(p, jumps, ρ_eff, setup, U.u, a, dt, i, scr)
+        println("Finished Poisson pressure solve")
 
         # velocity projection to ensure divergence free-ness:
-        project_var_ρ_mat!(U.u, p, Bu, G, Bp, P, Rinv, jump_vec, setup, a, dt, i)
+        project_var_ρ_mat!(U.u, p, ρ_eff, jumps, setup, a, dt, i, scr)
+        println("Finished velocity projection")
+        NS.apply_bc_u!(U.u, t, setup)
+        println("Setting up divergence stats")
+        div_post_l2, div_post_linf = divergence_stats!(divbuf, U.u, setup)
+        cg_res = isempty(hist[:resnorm]) ? eltype(U.u)(NaN) : last(hist[:resnorm])
+        @info "projection (matrix)" stage = i cg_iters = hist.iters cg_converged = hist.isconverged cg_resnorm = cg_res div_pre_l2 = div_pre_l2 div_post_l2 = div_post_l2 div_pre_linf = div_pre_linf div_post_linf = div_post_linf
         ##################################################################################
+        # BLAS.set_num_threads(1)     # avoid oversubscription of threads, competing with julia Threads
 
         # div_pre_l2, div_pre_linf = divergence_stats!(divbuf, U.u, setup)
         # u_before_proj = copy(U.u)
@@ -225,7 +269,8 @@ function rk3step_SH_mat!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp
         # Evolve U0
         # Skip for last iter
         if i < nstage
-            @. U0.u += b[i] * dt * F.u
+            # @. U0.u += b[i] * dt * F.u
+            @. U0.u += (b[i] / a[i]) * (U.u - U0.u)
             @. U0.c += b[i] * dt * dc_dt
             @. U0.centr += b[i] * dt * dcentr_dt
         end

@@ -25,11 +25,12 @@ setup = N.Setup(;
 
 # psolver = N.default_psolver(setup)
 
-# ncub, ℓₘ, R, σ = 8066, 15, 1e-3, 73e-4
+# ncub, ℓₘ, R, σ = 8066, 15, 1e-3, 73e-3
 ncub, ℓₘ, R, σ = 8066, 2, 1.0, 10.0
 Bub, Precomp_SH = bubble_setup(ncub, ℓₘ, R, σ, L)
 
 # Velocity field
 u = zeros(n + 2, n + 2, n + 2, 3);
 
-solveandplot(u, Bub, setup, Precomp_SH, L);
+# solveandplot(u, Bub, setup, Precomp_SH, L);
+solveandplot_mat(u, Bub, setup, Precomp_SH, L);

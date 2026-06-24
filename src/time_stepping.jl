@@ -3,7 +3,8 @@ using Makie, WGLMakie
 import IncompressibleNavierStokes as NS
 include("SH.jl")    # import source code
 include("logging.jl")
-include("RK4.jl")
+include("matrix_based.jl")
+# include("RK3.jl")
 const IS = NS.IterativeSolvers
 
 using Adapt
@@ -13,6 +14,7 @@ using LinearAlgebra
 using StaticArrays
 using SparseArrays
 import AcceleratedKernels as AK
+using AlgebraicMultigrid
 
 using Interpolations
 
@@ -26,15 +28,16 @@ getparams() = (;
     # densities = (; liquid = 1e3, gas = 1.25),
     # viscosities = (; liquid = 1e-6, gas = 1.44e-5),  # kinematic!
     # densities = (; liquid = 0.1, gas = 100.0/500.),
-    densities = (; liquid = 0.1, gas = 0.1),
-    # viscosities = (; liquid = 1e-5, gas = 0.35e-2),  # kinematic!
-    viscosities = (; liquid = 1e-6, gas = 1e-6),
+    densities = (; liquid = 0.1, gas = 100.0),
+    # densities = (; liquid = 0.1, gas = 0.1),
+    viscosities = (; liquid = 1e-5, gas = 0.35e-2),  # kinematic!
+    # viscosities = (; liquid = 1e-6, gas = 1e-6),
 
     # Time integration
     # dt = 0.5e-3,
-    dt = 0.0005,
+    dt = 0.015,
     nsubstep = 1, # Steps between plot updates
-    nstep = 10000,
+    nstep = 2000,
 )
 
 "Left index `n` times away in direction `i`."
@@ -45,55 +48,55 @@ getparams() = (;
 @inline right(I::CartesianIndex{D}, i, n = 1) where {D} =
     CartesianIndex(ntuple(j -> j == i ? I[j] + n : I[j], D))
 
-function map_surface_tension!(Fu, setup, surf_tension, r, ϕ, θ, Bub, fractions)
-    xcub, ycub, zcub = spc2cart(r, ϕ, θ)
+# function map_surface_tension!(Fu, setup, surf_tension, r, ϕ, θ, Bub, fractions)
+#     xcub, ycub, zcub = spc2cart(r, ϕ, θ)
 
-    (; densities) = getparams()
+#     (; densities) = getparams()
 
-    for i = eachindex(xcub)     # 1:length(xcub)
-        # Find indices of pressure volume containing quadrature point
-        xquad =
-         xcub[i] + Bub.centr[1],
-         ycub[i] + Bub.centr[2],
-         zcub[i] + Bub.centr[3]
+#     for i = eachindex(xcub)     # 1:length(xcub)
+#         # Find indices of pressure volume containing quadrature point
+#         xquad =
+#          xcub[i] + Bub.centr[1],
+#          ycub[i] + Bub.centr[2],
+#          zcub[i] + Bub.centr[3]
 
-        neighbors = ntuple(3) do dim
-            xdim = setup.xu[dim][dim] # Vector of staggered points in direction dim
+#         neighbors = ntuple(3) do dim
+#             xdim = setup.xu[dim][dim] # Vector of staggered points in direction dim
 
-            ii = 1
-            while xdim[ii] < xquad[dim] && ii < length(xdim)
-                ii += 1
-            end
-            return ii
-        end
+#             ii = 1
+#             while xdim[ii] < xquad[dim] && ii < length(xdim)
+#                 ii += 1
+#             end
+#             return ii
+#         end
 
-        # Find computational cell where 'xquad' resides
-        bounds = ntuple(3) do dim
-            ii = neighbors[dim] # Right
-            xdim = setup.xu[dim][dim]
-            return xdim[ii-1], xdim[ii] # Left and right
-        end
+#         # Find computational cell where 'xquad' resides
+#         bounds = ntuple(3) do dim
+#             ii = neighbors[dim] # Right
+#             xdim = setup.xu[dim][dim]
+#             return xdim[ii-1], xdim[ii] # Left and right
+#         end
 
-        # Volumetric surface tension force [N/m³]
-        Fσ = surf_tension[i, :] / (bounds[1][2] - bounds[1][1]) / (bounds[2][2] - bounds[2][1]) / (bounds[3][2] - bounds[3][1])
+#         # Volumetric surface tension force [N/m³]
+#         Fσ = surf_tension[i, :] / (bounds[1][2] - bounds[1][1]) / (bounds[2][2] - bounds[2][1]) / (bounds[3][2] - bounds[3][1])
         
-        # Add to existing force (convection-diffusion etc.)
-        I = CartesianIndex(neighbors)
-        for dim = 1:3
-            @assert I[dim] > 1
-            # Find phase fraction for each velocity cell and divide Fσ by effective density:
-            a = (fractions[I] + fractions[right(I, dim, 1)]) / 2        # interpolate to velocity point
-            dens = (1 - a) * densities.liquid + a * densities.gas       # effective density
-            a_left = (fractions[left(I, dim, 1)] + fractions[I]) / 2
-            dens_left = (1 - a_left) * densities.liquid + a_left * densities.gas
-            Fu[left(I, dim, 1), dim] += Fσ[dim] * (xquad[dim] - bounds[dim][1]) / (bounds[dim][2] - bounds[dim][1]) / dens_left
-            Fu[I, dim] += Fσ[dim] * (bounds[dim][2] - xquad[dim]) / (bounds[dim][2] - bounds[dim][1]) / dens
-        end
+#         # Add to existing force (convection-diffusion etc.)
+#         I = CartesianIndex(neighbors)
+#         for dim = 1:3
+#             @assert I[dim] > 1
+#             # Find phase fraction for each velocity cell and divide Fσ by effective density:
+#             a = (fractions[I] + fractions[right(I, dim, 1)]) / 2        # interpolate to velocity point
+#             dens = (1 - a) * densities.liquid + a * densities.gas       # effective density
+#             a_left = (fractions[left(I, dim, 1)] + fractions[I]) / 2
+#             dens_left = (1 - a_left) * densities.liquid + a_left * densities.gas
+#             Fu[left(I, dim, 1), dim] += Fσ[dim] * (xquad[dim] - bounds[dim][1]) / (bounds[dim][2] - bounds[dim][1]) / dens_left
+#             Fu[I, dim] += Fσ[dim] * (bounds[dim][2] - xquad[dim]) / (bounds[dim][2] - bounds[dim][1]) / dens
+#         end
 
-    end
+#     end
 
-    return nothing
-end
+#     return nothing
+# end
 
 function map_velocity_cubic(u, setup, xcub, ycub, zcub)
     (; xp) = setup 
@@ -201,7 +204,7 @@ function applygravity!(f)
     end
 end
 
-function apply_effective_gravity!(f, fractions, setup)
+function apply_effective_gravity!(f, ρ_eff, setup)
     g = getparams().gravity
     (; densities) = getparams()
     (; Iu) = setup
@@ -213,9 +216,9 @@ function apply_effective_gravity!(f, fractions, setup)
         I = CartesianIndex(i, j, k)
         I in Iu[dim] || return nothing
 
-        a_face = (fractions[I] + fractions[right(I, dim)]) / 2
-        ρ_face = (1 - a_face) * densities.liquid + a_face * densities.gas
-        f[II] += g[dim] * (1 - ρ_ref / ρ_face)
+        # a_face = (fractions[I] + fractions[right(I, dim)]) / 2
+        # ρ_face = (1 - a_face) * densities.liquid + a_face * densities.gas
+        f[II] += g[dim] * (1 - ρ_ref / ρ_eff[II])
         return nothing
     end
 end
@@ -388,7 +391,6 @@ function Laplacian_var_ρ(Lp, p, ρ_eff, flux, setup)
     poisson_flux_var_ρ!(flux, p, ρ_eff, nothing, setup; usejump = false)    # jump lives in RHS
     NS.divergence!(Lp, flux, setup)
     NS.scalewithvolume!(Lp, setup)
-    # NS.apply_bc_p!(Lp, T(0), setup)   # breaks symmetry, detrimental to conjugate gradient
     return nothing
 end
 
@@ -426,43 +428,43 @@ function LinearAlgebra.mul!(yv, op::PoissonOp_var_ρ, xv)
 end
 
 ### for preconditioner (Jacobi)
-function poisson_diagonal_var_ρ(ρ_eff, setup)
-    T = eltype(ρ_eff)
-    (; Iu, Δu, Ip) = setup
-    # Pressure-shaped diagonal, assembled by gathering neighboring face
-    # conductances for each pressure cell. This avoids scatter-add races.
-    d = NS.scalarfield(setup)
-    fill!(d, zero(T))
+# function poisson_diagonal_var_ρ(ρ_eff, setup)
+#     T = eltype(ρ_eff)
+#     (; Iu, Δu, Ip) = setup
+#     # Pressure-shaped diagonal, assembled by gathering neighboring face
+#     # conductances for each pressure cell. This avoids scatter-add races.
+#     d = NS.scalarfield(setup)
+#     fill!(d, zero(T))
 
-    AK.foreachindex(d) do idx
-        I = CartesianIndices(d)[idx]
-        I in Ip || return nothing
+#     AK.foreachindex(d) do idx
+#         I = CartesianIndices(d)[idx]
+#         I in Ip || return nothing
 
-        diag_I = zero(T)
-        for dim in 1:3
-            # Right face adjacent to pressure cell I.
-            if I in Iu[dim]
-                IIr = CartesianIndex(I.I..., dim)
-                diag_I -= one(T) / (ρ_eff[IIr] * Δu[dim][I[dim]]^2)
-            end
+#         diag_I = zero(T)
+#         for dim in 1:3
+#             # Right face adjacent to pressure cell I.
+#             if I in Iu[dim]
+#                 IIr = CartesianIndex(I.I..., dim)
+#                 diag_I -= one(T) / (ρ_eff[IIr] * Δu[dim][I[dim]]^2)
+#             end
 
-            # Left face adjacent to pressure cell I.
-            Il = left(I, dim)
-            if Il in Iu[dim]
-                IIl = CartesianIndex(Il.I..., dim)
-                diag_I -= one(T) / (ρ_eff[IIl] * Δu[dim][Il[dim]]^2)
-            end
-        end
+#             # Left face adjacent to pressure cell I.
+#             Il = left(I, dim)
+#             if Il in Iu[dim]
+#                 IIl = CartesianIndex(Il.I..., dim)
+#                 diag_I -= one(T) / (ρ_eff[IIl] * Δu[dim][Il[dim]]^2)
+#             end
+#         end
 
-        d[I] = diag_I
-        return nothing
-    end
+#         d[I] = diag_I
+#         return nothing
+#     end
 
-    # Match the operator scaling L_ρ = Ω_p D(ρ^{-1}∇).
-    NS.scalewithvolume!(d, setup)
+#     # Match the operator scaling L_ρ = Ω_p D(ρ^{-1}∇).
+#     NS.scalewithvolume!(d, setup)
 
-    return d
-end
+#     return d
+# end
 
 ###############
 
@@ -634,8 +636,8 @@ function potential_and_var_ρ!(ψ, jumps, ρ_eff, sdf, Bub, Precomp_SH, setup)
             x_surf = (x_low .+ x_high) ./ 2
             _, ϕ_surf, θ_surf = cart2spc(x_surf[1] - Bub.centr[1], x_surf[2] - Bub.centr[2], x_surf[3] - Bub.centr[3])
 
-            (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero) = get_SH_der2(maximum(Precomp_SH.ℓs), ϕ_surf, θ_surf)
-            Precomp_SH_temp = (; ϕ = [ϕ_surf], θ = [θ_surf], Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero)
+            (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero, two, mtwo) = get_SH_der2(maximum(Precomp_SH.ℓs), ϕ_surf, θ_surf)
+            Precomp_SH_temp = (; ϕ = [ϕ_surf], θ = [θ_surf], Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero, two, mtwo)
             Dynamic_SH_temp = Y2r(Bub, Precomp_SH_temp)
 
             dS = surface_element(Precomp_SH_temp, Dynamic_SH_temp)
@@ -689,20 +691,20 @@ function count_cut_corners(sdf, fractions, setup)
 end
 
 
-function p_jump!(jumps, ψ, setup)
-    (; Iu, Δu) = setup
+# function p_jump!(jumps, ψ, setup)
+#     (; Iu, Δu) = setup
 
-    AK.foreachindex(jumps) do ilin
-        II = CartesianIndices(jumps)[ilin]
-        i, j, k, dim = II.I
-        I = CartesianIndex(i, j, k)
-        I in Iu[dim] || return nothing
+#     AK.foreachindex(jumps) do ilin
+#         II = CartesianIndices(jumps)[ilin]
+#         i, j, k, dim = II.I
+#         I = CartesianIndex(i, j, k)
+#         I in Iu[dim] || return nothing
 
-        jumps[II] = (ψ[right(I,dim,1)] - ψ[I]) / Δu[dim][II.I[dim]]
-        return nothing
-    end
-    return nothing
-end
+#         jumps[II] = (ψ[right(I,dim,1)] - ψ[I]) / Δu[dim][II.I[dim]]
+#         return nothing
+#     end
+#     return nothing
+# end
 
 function divergence_stats!(divbuf, u, setup)
     NS.divergence!(divbuf, u, setup)
@@ -763,7 +765,7 @@ function rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH;
         # cut, tot = count_cut_corners(sdf, fractions, setup)
         # @info "cut corners" cut = cut tot = tot
 
-        fill!(F.u, 0)           # Initialize with 0
+        fill!(F.u, 0.0)           # Initialize with 0
         convectiondiffusion_nonconstant_SH!(F.u, U.u, sdf, ρ_eff, setup) # This adds to existing force
 
         # p_jump!(jumps, ψ, setup)
@@ -819,13 +821,13 @@ function rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH;
         xcub .= xcub .+ Bub.centr[1]
         ycub .= ycub .+ Bub.centr[2]
         zcub .= zcub .+ Bub.centr[3] 
-        u_cub = map_velocity(U.u, setup, xcub, ycub, zcub)
+        # u_cub = map_velocity(U.u, setup, xcub, ycub, zcub)
         u_cub = map_velocity_cubic(U.u, setup, xcub, ycub, zcub)
         dc_dt, dcentr_dt = time_step(Bub, Precomp_SH, Dynamic_SH, u_cub, vol)
 
         # Evolve U: flow field (without pressure gradient and jump in momentum equation)
         t = t0 + rk_c[i] * dt
-        @. U.u = U0.u + a[i] * dt * F.u # U0.u does not include pressure jump effects and not div-free!
+        @. U.u = U0.u + a[i] * dt * F.u     # U0.u does not include pressure jump effects and not div-free!
         NS.apply_bc_u!(U.u, t, setup)
 
         ################## matrix-free pressure solve and velocity projection:
@@ -855,7 +857,7 @@ function rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH;
         # Evolve U0
         # Skip for last iter
         if i < nstage
-            # @U0.U += b[i] * dt * F.u
+            # @. U0.u += b[i] * dt * F.u
             # Use the projected stage increment so U0 carries pressure/jump effects too.
             @. U0.u += (b[i] / a[i]) * (U.u - U0.u)
             @. U0.c += b[i] * dt * dc_dt
@@ -917,8 +919,8 @@ function solveandplot(u, Bub, setup, Precomp_SH, L, visualize=false)
     params = getparams()
     (; dt, nsubstep, nstep) = params
     vtk_every = 5
-    vtk_dir = joinpath("output", "vtk12")
-    bubble_log_path = joinpath("output", "bubble12", "bubble_history.txt")
+    vtk_dir = joinpath("output", "vtk37")
+    bubble_log_path = joinpath("output", "bubble37", "bubble_history.txt")
     flow_centered_series = Vector{Tuple{Float64,String}}()
     staggered_x_series = Vector{Tuple{Float64,String}}()
     staggered_y_series = Vector{Tuple{Float64,String}}()
@@ -975,6 +977,200 @@ function solveandplot(u, Bub, setup, Precomp_SH, L, visualize=false)
             # Perform one RK3 step of step size `dt`
             # rk3step_SH_mat!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH)
             rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH; ρ_eff, jumps, ψ, scr)
+            # rk3_true_SH!(F, U0, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH; ρ_eff, jumps, ψ, scr)
+            t += dt
+            @info "bubble centroid = $(Bub.centr), mean z-velocity = $(sum(U.u[:, :, :, 3])/(3*size(U.u)[1]))"
+
+            xbub, ybub, zbub = get_bubble(Bub, Precomp_SH)
+            println("min x: $(minimum(xbub)), max x: $(maximum(xbub))")
+            println("min y: $(minimum(ybub)), max y: $(maximum(ybub))")
+            println("min z: $(minimum(zbub)), max z: $(maximum(zbub))")
+            # println("coefs: $(Bub.c)")
+
+            # @info "itime = $itime / $nstep, isub = $isub / $nsubstep, t = $(round(t, digits = 4))" # maximum(abs, U.u)
+        end
+
+        if visualize
+            xvis, yvis, zvis = setup.xp[1][2:end-1], setup.xp[2][2:end-1], setup.xp[3][2:end-1]
+            uv = map_velocity(U.u, setup, xvis, yvis, zvis)
+            ps = [Point3f(x, y, z) for x in xvis for y in yvis for z in zvis]
+            ns = [Vec3f(u1, u2, u3) for u1 in uv[1:end, 1] for u2 in uv[1:end, 2] for u3 in uv[1:end, 3]]
+            mag = norm.(ns)
+            ns .= ns / maximum(mag) * .002
+            mag[mag .< .9 * maximum(mag)] .= NaN
+
+            # xb, yb, zb = get_bubble(Bub, Precomp_SH)
+            rbub = Yvis * Bub.c
+            centr = Bub.centr
+            xb, yb, zb = centr[1] .+ rbub .* sin.(vec(ϕvis)) .* cos.(vec(θvis)),
+                                centr[2] .+ rbub .* sin.(vec(ϕvis)) .* sin.(vec(θvis)), 
+                                centr[3] .+ rbub .* cos.(vec(ϕvis))
+
+            empty!(ax)
+
+            arrows3d!(ax, ps, ns, color = mag, colormap = :viridis, alpha = .2, lengthscale=.5)
+            surface!(ax, reshape(xb, nvis, nvis), reshape(yb, nvis, nvis), reshape(zb, nvis, nvis), 
+                    color = ones(Float64, (nvis, nvis)), colormap = :magma)
+
+            save("plots/snapshot_t=$(round(t, digits = 4)).png", fig)
+        end
+
+        if (itime % vtk_every == 0) || (itime == 1) || (itime == nstep)
+            rbub = Yvis * Bub.c
+            centr = Bub.centr
+            xb, yb, zb = centr[1] .+ rbub .* sin.(vec(ϕvis)) .* cos.(vec(θvis)),
+                                centr[2] .+ rbub .* sin.(vec(ϕvis)) .* sin.(vec(θvis)), 
+                                centr[3] .+ rbub .* cos.(vec(ϕvis))
+
+            flow_file, sfx_file, sfy_file, sfz_file, surf_file = write_vtk_snapshot!(vtk_dir, itime, t, setup, U, fractions, ρ_eff, xb, yb, zb, nvis)
+            push!(flow_centered_series, (t, relpath(flow_file, vtk_dir)))
+            push!(staggered_x_series, (t, relpath(sfx_file, vtk_dir)))
+            push!(staggered_y_series, (t, relpath(sfy_file, vtk_dir)))
+            push!(staggered_z_series, (t, relpath(sfz_file, vtk_dir)))
+            push!(surf_series,         (t, relpath(surf_file, vtk_dir)))
+        end
+
+        dt_com = t - prev_t
+        vcom = dt_com > 0 ? (Bub.centr .- prev_centr) ./ dt_com : zero.(Bub.centr)
+        append_bubble_history_log(bubble_log_path, t, itime, Bub.c, Bub.centr, vcom)
+        prev_t = t
+        prev_centr .= Bub.centr
+
+        @info "itime = $itime / $nstep, t = $(round(t, digits = 5))" # maximum(abs, U.u)
+    end
+
+    write_pvd(joinpath(vtk_dir, "flow_centered.pvd"), flow_centered_series)
+    write_pvd(joinpath(vtk_dir, "staggered_x.pvd"), staggered_x_series)
+    write_pvd(joinpath(vtk_dir, "staggered_y.pvd"), staggered_y_series)
+    write_pvd(joinpath(vtk_dir, "staggered_z.pvd"), staggered_z_series)
+    write_pvd(joinpath(vtk_dir, "bubble_surface.pvd"), surf_series)
+
+    return U
+end
+
+mutable struct AMGCache{TM,TP}
+    ml::TM
+    Pl::TP
+    n_calls::Int
+end
+
+function init_AMGCache(A)
+    ml = ruge_stuben(A)
+    Pl = aspreconditioner(ml)
+    return AMGCache(ml, Pl, 0)
+end
+
+function solveandplot_mat(u, Bub, setup, Precomp_SH, L, visualize=false)
+    nvis = 50
+    preϕ = range(0.001, 0.999π, nvis)
+    preθ = range(0, 2π, nvis)
+    # _, ϕ, θ = get_points_spc(npoints)
+    ϕvis = zeros(Float64, (length(preϕ), length(preθ)))
+    θvis = similar(ϕvis)
+
+    for i = eachindex(preϕ)
+        for j = eachindex(preθ)
+            ϕvis[i,j] = preϕ[i]
+            θvis[i,j] = preθ[j]
+        end
+    end
+
+    Yvis = get_SH(ℓₘ, ϕvis, θvis)
+    
+    (; Np) = setup
+
+    params = getparams()
+    (; dt, nsubstep, nstep) = params
+    vtk_every = 5
+    vtk_dir = joinpath("output", "vtk50")
+    bubble_log_path = joinpath("output", "bubble50", "bubble_history.txt")
+    flow_centered_series = Vector{Tuple{Float64,String}}()
+    staggered_x_series = Vector{Tuple{Float64,String}}()
+    staggered_y_series = Vector{Tuple{Float64,String}}()
+    staggered_z_series = Vector{Tuple{Float64,String}}()
+    surf_series = Vector{Tuple{Float64,String}}()
+    init_bubble_history_log(bubble_log_path, length(Bub.c))
+    prev_t = 0.0
+    prev_centr = copy(Bub.centr)
+
+    # Allocate registers
+    U = (; u, Bub.c, Bub.centr) # Current state
+    U0 = deepcopy(U) # RK3 accumulator for previous stages
+    F = deepcopy(U) # RK3 right hand side
+    # tension = similar(x) # Surface tension at markers
+    p = NS.scalarfield(setup) # Pressure
+    fractions = NS.scalarfield(setup)   # phase fractions (1.0 if inside bubble, 0.0 outside)
+    sdf = NS.scalarfield(setup)         # <0 if cell center (pressure point) inside bubble, >0 if outside 
+    ρ_eff = similar(u)      # effective face density for variable-ρ Poisson solve
+    jumps = similar(u)      # pressure jump at faces for variable-ρ Poisson solve
+    ψ = similar(p)
+
+        # Laplacian:
+    potential_and_var_ρ!(ψ, jumps, ρ_eff, sdf, Bub, Precomp_SH, setup)
+
+    # BLAS.set_num_threads(6)
+    P = NS.pad_scalarfield_mat(setup); Bp = NS.bc_p_mat(setup)
+    Bu = NS.bc_u_mat(setup)
+    G = NS.pressuregradient_mat(setup)
+    M = NS.divergence_mat(setup)
+    Ω = NS.volume_mat(setup)
+    Left = P' * Ω * M 
+    Right = Bu * G * Bp * P
+    Lp = Left * Diagonal(vec(1 ./ ρ_eff)) * Right
+
+    # T = eltype(Lp)
+    # e = fill(T(1), prod(Np))
+    T = eltype(Lp)
+    Lp = @. (Lp + Lp') / 2  # symmetrize to remove floating-point asymmetry
+    # Get symbolic sparsity pattern for preconditioner (-Lp is PSD → cholesky):
+    # Fac = cholesky(Symmetric(-Lp); shift = sqrt(eps(T)) * maximum(diag(-Lp)))
+    # BLAS.set_num_threads
+    cache = init_AMGCache(Symmetric(-Lp))
+
+    println("Factorization factored symbolically")
+
+    scr = (;
+        Left, 
+        Right,
+        Bu,
+        cache,
+        gp = similar(u),
+        flux = similar(u)
+        # rhs = similar(p),
+        # div_jump = similar(p),
+        # jump_flux = similar(u),
+        # flux = similar(u),
+        # q = similar(p),
+        # Lq = similar(p),
+        # xv = vec(similar(p)),
+        # bv = vec(similar(p)),
+        # divbuf = similar(p)
+    )
+
+    xbub, ybub, zbub = get_bubble(Bub, Precomp_SH)
+
+    t = 0.0
+
+    println("min x: $(minimum(xbub)), max x: $(maximum(xbub))")
+    println("min y: $(minimum(ybub)), max y: $(maximum(ybub))")
+    println("min z: $(minimum(zbub)), max z: $(maximum(zbub))")
+    # println("coefs: $(Bub.c)")
+    # error()
+
+    if visualize
+        fig = Figure(size = (800, 800)) 
+        ax = Axis3(fig[1,1], aspect = :equal)
+        xlims!(ax, (0, L))
+        ylims!(ax, (0, L))
+        zlims!(ax, (0, L))
+    end
+
+    # Makie.record(fig, "test_bubble.mp4", 1:nstep) do itime
+    for itime in 1:nstep
+        for isub in 1:nsubstep
+            # Perform one RK3 step of step size `dt`
+            rk3step_SH_mat!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH; ρ_eff, jumps, ψ, scr)
+            # rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH; ρ_eff, jumps, ψ, scr)
             # rk4_sh!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH; ρ_eff, jumps, ψ, scr)
             t += dt
             @info "bubble centroid = $(Bub.centr), mean z-velocity = $(sum(U.u[:, :, :, 3])/(3*size(U.u)[1]))"
