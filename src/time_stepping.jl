@@ -28,16 +28,24 @@ getparams() = (;
     # densities = (; liquid = 1e3, gas = 1.25),
     # viscosities = (; liquid = 1e-6, gas = 1.44e-5),  # kinematic!
     # densities = (; liquid = 0.1, gas = 100.0/500.),
-    densities = (; liquid = 0.1, gas = 100.0),
+    # densities = (; liquid = 0.1, gas = 100.0),
     # densities = (; liquid = 0.1, gas = 0.1),
-    viscosities = (; liquid = 1e-5, gas = 0.35e-2),  # kinematic!
+    # viscosities = (; liquid = 1e-5, gas = 0.35e-2),  # kinematic!
     # viscosities = (; liquid = 1e-6, gas = 1e-6),
+
+    # spurious currents:
+    # densities = (; liquid = 1e-2, gas = 1e-2),
+    # viscosities = (; liquid = 1e-1, gas = 1e-1),  # kinematic!
+
+    # Lamb:
+    densities = (; liquid = 0.1, gas = 100),
+    viscosities = (; liquid = 1e-5, gas = 0.35e-2),  # kinematic!
 
     # Time integration
     # dt = 0.5e-3,
-    dt = 0.015,
+    dt = 0.001,
     nsubstep = 1, # Steps between plot updates
-    nstep = 2000,
+    nstep = 10000,
 )
 
 "Left index `n` times away in direction `i`."
@@ -305,7 +313,13 @@ This is determined by whether the number of intersections of the segment `point`
 `point` and `xcenter` are `MyPoint`s, while `x` is a vector of `MyPoint`s.
 """
 function check_if_inside_SH(point, Bub, Precomp_SH)
-    rp, ϕp, θp = cart2spc(point[1] - Bub.centr[1], point[2] - Bub.centr[2], point[3] - Bub.centr[3])
+    dx = point[1] - Bub.centr[1]
+    dy = point[2] - Bub.centr[2]
+    dz = point[3] - Bub.centr[3]
+    rp = sqrt(dx^2 + dy^2 + dz^2)
+    T = eltype(point)
+    dz_safe = dz + (rp<eps(T)) * eps(T) 
+    _, ϕp, θp = cart2spc(dx, dy, dz_safe)
     # dist_point_centr = sqrt((point[1] - Bub.centr[1])^2 + (point[2] - Bub.centr[2])^2 + (point[3] - Bub.centr[3])^2)
     dist_bub_centr = dot(Bub.c, get_SH(maximum(Precomp_SH.ℓs), ϕp, θp))
     signed_dist = rp - dist_bub_centr
@@ -516,8 +530,8 @@ function poisson_and_project_var_ρ!(u, jumps, ρ_eff, adt, setup; p, scr, stage
     poisson_rhs_var_ρ!(rhs, div_jump, jump_flux, u, ρ_eff, jumps, adt, setup)
     zero_mean_Ip!(rhs, Ip)
 
-    # @show sum(view(rhs, Ip)) / length(view(rhs, Ip))  # should be ~0 (zero-mean)
-    # @show abs(sum(view(div_jump, Ip)))                # should be ~0
+    @show sum(view(rhs, Ip)) / length(view(rhs, Ip))  # should be ~0 (zero-mean)
+    @show abs(sum(view(div_jump, Ip)))                # should be ~0
 
     # Only copy interior entries to bv: ghost entries of rhs are nonzero (set by
     # NS.apply_bc_p! reflection) but the operator zeroes ghost DOFs, making
@@ -618,6 +632,10 @@ function potential_and_var_ρ!(ψ, jumps, ρ_eff, sdf, Bub, Precomp_SH, setup)
             # _, ϕ_surf, θ_surf = cart2spc(x_surf[1] - Bub.centr[1], x_surf[2] - Bub.centr[2], x_surf[3] - Bub.centr[3])
             
             # bisection search parallel to dimension axis:
+            # @show II, i, j, k, dim
+            # @show length(setup.xu[dim][1]), length(setup.xu[dim][2]), length(setup.xu[dim][3])
+            # @show setup.xu[dim][1][i], setup.xu[dim][2][j], setup.xu[dim][3][k]   # any NaN/garbage?
+            # @show setup.xp[dim][II.I[dim]], setup.xp[dim][II.I[dim]+1]
             x_low = [setup.xu[dim][1][i], setup.xu[dim][2][j], setup.xu[dim][3][k]]
             x_high = copy(x_low)
             x_low[dim] = setup.xp[dim][II.I[dim]]
@@ -632,10 +650,14 @@ function potential_and_var_ρ!(ψ, jumps, ρ_eff, sdf, Bub, Precomp_SH, setup)
                     x_high = x_mid
                 end
             end
+            # inside_low  = check_if_inside_SH(x_low,  Bub, Precomp_SH)[1]
+            # inside_high = check_if_inside_SH(x_high, Bub, Precomp_SH)[1]
+            # @assert inside_low != inside_high "bisection bracket does not contain interface at II=$II"
 
             x_surf = (x_low .+ x_high) ./ 2
+            # @show x_surf, x_surf .- Bub.centr
             _, ϕ_surf, θ_surf = cart2spc(x_surf[1] - Bub.centr[1], x_surf[2] - Bub.centr[2], x_surf[3] - Bub.centr[3])
-
+            # @show ϕ_surf, θ_surf            # NaN here ⇒ degenerate point (r≈0)
             (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero, two, mtwo) = get_SH_der2(maximum(Precomp_SH.ℓs), ϕ_surf, θ_surf)
             Precomp_SH_temp = (; ϕ = [ϕ_surf], θ = [θ_surf], Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero, two, mtwo)
             Dynamic_SH_temp = Y2r(Bub, Precomp_SH_temp)
@@ -650,6 +672,9 @@ function potential_and_var_ρ!(ψ, jumps, ρ_eff, sdf, Bub, Precomp_SH, setup)
                     (1 - left_inside) * (frac_left * densities.liquid + (1 - frac_left) * densities.gas)
             p_jump = - Bub.σ * κ / Δu[dim][II.I[dim]]
             jumps[II] = left_inside ? - p_jump : p_jump # signs consistent with ∇p, **not** -∇p
+
+            # @show κ                          # NaN here ⇒ curvature blew up
+            # @show maximum(abs, jumps)
 
         else
             # frac_left = abs(sdf[I]) / (abs(sdf[I]) + abs(sdf[right(I,dim,1)]))
@@ -745,6 +770,10 @@ function rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH;
         compute_fractions_SH!(fractions, sdf, Bub, Precomp_SH, setup) # Current phase fractions
         potential_and_var_ρ!(ψ, jumps, ρ_eff, sdf, Bub, Precomp_SH, setup)
 
+        # @show minimum(ρ_eff) maximum(ρ_eff)
+        # @show minimum(jumps) maximum(jumps) minimum(abs, jumps) maximum(abs, jumps) 
+        # @show any(isnan, ρ_eff) any(isinf, ρ_eff) any(isnan, jumps) any(isinf, jumps)
+
         # let
         #     crossing = falses(size(ρ_eff))
         #     for idx_II in CartesianIndices(ρ_eff)
@@ -768,7 +797,16 @@ function rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH;
         fill!(F.u, 0.0)           # Initialize with 0
         convectiondiffusion_nonconstant_SH!(F.u, U.u, sdf, ρ_eff, setup) # This adds to existing force
 
+        # @show any(isnan, F.u), count(isnan, F.u)           # is F.u NaN?
+        # @show any(isnan, U.u)                               # is u* NaN?
         # p_jump!(jumps, ψ, setup)
+
+        # nan_idx = findall(isnan, F.u)
+        # for II in nan_idx
+        #     i,j,k,dim = II.I
+        #     I = CartesianIndex(i,j,k)
+            # @show II.I, sdf[I], (I in setup.Iu[dim])
+        # end
 
         # apply_effective_gravity!(F.u, fractions, setup)
 
@@ -829,6 +867,10 @@ function rk3step_SH!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH;
         t = t0 + rk_c[i] * dt
         @. U.u = U0.u + a[i] * dt * F.u     # U0.u does not include pressure jump effects and not div-free!
         NS.apply_bc_u!(U.u, t, setup)
+
+        # @show any(isnan, U.u)                               # is u* NaN?
+        # NS.divergence!(rhs, U.u, setup); NS.scalewithvolume!(rhs, setup)
+        # @show any(isnan, view(rhs, Ip))  
 
         ################## matrix-free pressure solve and velocity projection:
         poisson_and_project_var_ρ!(U.u, jumps, ρ_eff, a[i]*dt, setup; p, scr, stage = i)
@@ -919,8 +961,8 @@ function solveandplot(u, Bub, setup, Precomp_SH, L, visualize=false)
     params = getparams()
     (; dt, nsubstep, nstep) = params
     vtk_every = 5
-    vtk_dir = joinpath("output", "vtk37")
-    bubble_log_path = joinpath("output", "bubble37", "bubble_history.txt")
+    vtk_dir = joinpath("output", "vtk_sc6")
+    bubble_log_path = joinpath("output", "bubble_sc6", "bubble_history.txt")
     flow_centered_series = Vector{Tuple{Float64,String}}()
     staggered_x_series = Vector{Tuple{Float64,String}}()
     staggered_y_series = Vector{Tuple{Float64,String}}()
@@ -1082,8 +1124,8 @@ function solveandplot_mat(u, Bub, setup, Precomp_SH, L, visualize=false)
     params = getparams()
     (; dt, nsubstep, nstep) = params
     vtk_every = 5
-    vtk_dir = joinpath("output", "vtk50")
-    bubble_log_path = joinpath("output", "bubble50", "bubble_history.txt")
+    vtk_dir = joinpath("output", "vtk_L_0_1")
+    bubble_log_path = joinpath("output", "bubble_L_0_1", "bubble_history.txt")
     flow_centered_series = Vector{Tuple{Float64,String}}()
     staggered_x_series = Vector{Tuple{Float64,String}}()
     staggered_y_series = Vector{Tuple{Float64,String}}()

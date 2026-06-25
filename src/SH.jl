@@ -226,7 +226,7 @@ function bubble_setup(ncub, ℓₘ, R, σ, L)
     c[1] = R * sqrt(4. * π)
 
     # Oscillating drop test case (Lamb, 1932):
-    c[7] = sin(5e-3)    # ℓ=2, m=0
+    c[7] = 0.025    # ℓ=2, m=0
 
     # Precomputed spherical harmonics (derivatives) at spherical design cubature points:
     (; Y, dY_dϕ, dY_dθ, d²Y_dϕ², d²Y_dθdϕ, d²Y_dθ², ℓs, ms, one, mone, zero, two, mtwo) = get_SH_der2(ℓₘ, ϕ, θ)
@@ -234,7 +234,7 @@ function bubble_setup(ncub, ℓₘ, R, σ, L)
 
     centr = [L/2, L/2, L/2]           # centroid position
     V = volume(Y2r((; c), Precomp_SH)) # total bubble volume from current SH shape
-    Bub = (; c, centr, V, σ)
+    Bub = (; c, centr, V, σ, R)
 
     return Bub, Precomp_SH
 end
