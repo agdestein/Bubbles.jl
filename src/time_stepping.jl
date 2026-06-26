@@ -43,9 +43,9 @@ getparams() = (;
 
     # Time integration
     # dt = 0.5e-3,
-    dt = 0.014,
+    dt = 1e-3,
     nsubstep = 1, # Steps between plot updates
-    nstep = 720,
+    nstep = 10000,
 )
 
 "Left index `n` times away in direction `i`."
@@ -1102,7 +1102,19 @@ function init_AMGCache(A)
     return AMGCache(ml, Pl, 0)
 end
 
-function solveandplot_mat(u, Bub, setup, Precomp_SH, L, visualize=false)
+function solveandplot_mat(u, Bub, setup, Precomp_SH, L, visualize=false; restart=false, t0=0.0, itime0=0)
+    function load_existing_pvd_entries(path)
+        isfile(path) || return Tuple{Float64,String}[]
+        entries = Tuple{Float64,String}[]
+        for line in eachline(path)
+            occursin("<DataSet", line) || continue
+            m = match(r"timestep=\"([^\"]+)\".*file=\"([^\"]+)\"", line)
+            m === nothing && continue
+            push!(entries, (parse(Float64, m.captures[1]), m.captures[2]))
+        end
+        return entries
+    end
+
     nvis = 50
     preϕ = range(0.001, 0.999π, nvis)
     preθ = range(0, 2π, nvis)
@@ -1124,15 +1136,24 @@ function solveandplot_mat(u, Bub, setup, Precomp_SH, L, visualize=false)
     params = getparams()
     (; dt, nsubstep, nstep) = params
     vtk_every = 5
-    vtk_dir = joinpath("output", "vtk_L_0_1_new")
-    bubble_log_path = joinpath("output", "bubble_L_0_1_new", "bubble_history.txt")
+    vtk_dir = joinpath("output", "vtk_L_0_1")
+    bubble_log_path = joinpath("output", "bubble_L_0_1", "bubble_history.txt")
     flow_centered_series = Vector{Tuple{Float64,String}}()
     staggered_x_series = Vector{Tuple{Float64,String}}()
     staggered_y_series = Vector{Tuple{Float64,String}}()
     staggered_z_series = Vector{Tuple{Float64,String}}()
     surf_series = Vector{Tuple{Float64,String}}()
-    init_bubble_history_log(bubble_log_path, length(Bub.c))
-    prev_t = 0.0
+    if restart
+        append!(flow_centered_series, load_existing_pvd_entries(joinpath(vtk_dir, "flow_centered.pvd")))
+        append!(staggered_x_series, load_existing_pvd_entries(joinpath(vtk_dir, "staggered_x.pvd")))
+        append!(staggered_y_series, load_existing_pvd_entries(joinpath(vtk_dir, "staggered_y.pvd")))
+        append!(staggered_z_series, load_existing_pvd_entries(joinpath(vtk_dir, "staggered_z.pvd")))
+        append!(surf_series, load_existing_pvd_entries(joinpath(vtk_dir, "bubble_surface.pvd")))
+    end
+    if !restart
+        init_bubble_history_log(bubble_log_path, length(Bub.c))
+    end
+    prev_t = t0
     prev_centr = copy(Bub.centr)
 
     # Allocate registers
@@ -1147,7 +1168,7 @@ function solveandplot_mat(u, Bub, setup, Precomp_SH, L, visualize=false)
     jumps = similar(u)      # pressure jump at faces for variable-ρ Poisson solve
     ψ = similar(p)
 
-        # Laplacian:
+    # Laplacian:
     potential_and_var_ρ!(ψ, jumps, ρ_eff, sdf, Bub, Precomp_SH, setup)
 
     # BLAS.set_num_threads(6)
@@ -1191,7 +1212,7 @@ function solveandplot_mat(u, Bub, setup, Precomp_SH, L, visualize=false)
 
     xbub, ybub, zbub = get_bubble(Bub, Precomp_SH)
 
-    t = 0.0
+    t = t0
 
     println("min x: $(minimum(xbub)), max x: $(maximum(xbub))")
     println("min y: $(minimum(ybub)), max y: $(maximum(ybub))")
@@ -1208,7 +1229,7 @@ function solveandplot_mat(u, Bub, setup, Precomp_SH, L, visualize=false)
     end
 
     # Makie.record(fig, "test_bubble.mp4", 1:nstep) do itime
-    for itime in 1:nstep
+    for itime in (itime0 + 1):nstep
         for isub in 1:nsubstep
             # Perform one RK3 step of step size `dt`
             rk3step_SH_mat!(F, U0, U, t, dt, fractions, sdf, p, setup, Bub, Precomp_SH; ρ_eff, jumps, ψ, scr)

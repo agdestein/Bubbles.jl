@@ -1,4 +1,168 @@
 using WriteVTK
+using ReadVTK
+
+function _list_vtk_series_files(vtk_dir; prefix, ext = ".vtr")
+	files = filter(readdir(vtk_dir; join = true)) do f
+		base = basename(f)
+		startswith(base, prefix) && endswith(base, ext)
+	end
+
+	isempty(files) && error("no files matching $(prefix)*$(ext) found in $(vtk_dir)")
+	sort!(files)
+	return files
+end
+
+function _vtk_point_data(vtk_file)
+	vtk = ReadVTK.VTKFile(vtk_file)
+	return ReadVTK.get_point_data(vtk)
+end
+
+function _read_vtk_component(vtk_file, component_name)
+	point_data = _vtk_point_data(vtk_file)
+	component_name in point_data.names ||
+		error("missing component $(component_name) in $(vtk_file)")
+	return ReadVTK.get_data_reshaped(point_data[component_name])
+end
+
+function _read_vtk_time(vtk_file)
+	point_data = _vtk_point_data(vtk_file)
+	if "time" in point_data.names
+		time_data = ReadVTK.get_data(point_data["time"])
+		return isempty(time_data) ? nothing : time_data[1]
+	end
+	return nothing
+end
+
+function _series_suffix_map(vtk_dir; prefix, ext = ".vtr")
+	files = _list_vtk_series_files(vtk_dir; prefix, ext)
+	suffix_map = Dict{String,String}()
+	for file in files
+		base = basename(file)
+		suffix = base[length(prefix) + 1:end-length(ext)]
+		suffix_map[suffix] = file
+	end
+	return suffix_map
+end
+
+"""
+Read one VTK file and extract velocity component arrays.
+
+By default this expects the `flow_centered_*.vtr` snapshots written by
+`write_vtk_snapshot!`, with point data names `u_x`, `u_y`, and `u_z`.
+"""
+function read_vtk_velocity_components(vtk_file; component_names = ("u_x", "u_y", "u_z"))
+	vtk = ReadVTK.VTKFile(vtk_file)
+	point_data = ReadVTK.get_point_data(vtk)
+
+	all(name -> name in point_data.names, component_names) ||
+		error("missing one or more velocity components $(collect(component_names)) in $(vtk_file)")
+
+	ux = ReadVTK.get_data_reshaped(point_data[component_names[1]])
+	uy = ReadVTK.get_data_reshaped(point_data[component_names[2]])
+	uz = ReadVTK.get_data_reshaped(point_data[component_names[3]])
+
+	return (; ux, uy, uz)
+end
+
+"""
+Read the final flow VTK snapshot in `vtk_dir` and compute max absolute velocity
+in each Cartesian component.
+
+Returns a named tuple with
+- `vtk_file`: selected file path
+- `maxabs`: named tuple `(ux, uy, uz)`
+- `velocities`: named tuple `(ux, uy, uz)` with full arrays
+"""
+function read_final_vtk_velocity_maxabs(
+	vtk_dir;
+	prefix = "flow_centered_",
+	ext = ".vtr",
+	component_names = ("u_x", "u_y", "u_z"),
+)
+	files = _list_vtk_series_files(vtk_dir; prefix, ext)
+	sort!(files)
+	vtk_file = files[end]
+	vel = read_vtk_velocity_components(vtk_file; component_names)
+
+	maxabs = (
+		ux = maximum(abs, vel.ux),
+		uy = maximum(abs, vel.uy),
+		uz = maximum(abs, vel.uz),
+	)
+
+	return (; vtk_file, maxabs, velocities = vel)
+end
+
+"""
+Read one set of face-centered staggered velocity files for a given timestep suffix.
+
+Returns a named tuple with file paths, optional time stamp, and velocity arrays
+`ux`, `uy`, `uz` read from `staggered_x/y/z_*.vtr`.
+"""
+function read_staggered_vtk_velocity_components(
+	vtk_dir,
+	suffix;
+	prefixes = ("staggered_x_", "staggered_y_", "staggered_z_"),
+	component_names = ("u_face_x", "u_face_y", "u_face_z"),
+	ext = ".vtr",
+)
+	files = (
+		ux = joinpath(vtk_dir, prefixes[1] * suffix * ext),
+		uy = joinpath(vtk_dir, prefixes[2] * suffix * ext),
+		uz = joinpath(vtk_dir, prefixes[3] * suffix * ext),
+	)
+
+	for file in values(files)
+		isfile(file) || error("missing staggered VTK file: $(file)")
+	end
+
+	velocities = (
+		ux = _read_vtk_component(files.ux, component_names[1]),
+		uy = _read_vtk_component(files.uy, component_names[2]),
+		uz = _read_vtk_component(files.uz, component_names[3]),
+	)
+	time = _read_vtk_time(files.ux)
+
+	return (; suffix, time, files, velocities...)
+end
+
+"""
+Read all face-centered staggered velocity snapshots in `vtk_dir`.
+
+Returns a vector of named tuples, one per timestep, with fields:
+- `suffix`: timestep identifier from the file name
+- `time`: stored time value if present, otherwise `nothing`
+- `files`: named tuple of x/y/z VTK file paths
+- `ux`, `uy`, `uz`: face-centered velocity arrays
+"""
+function read_all_staggered_vtk_velocities(
+	vtk_dir;
+	prefixes = ("staggered_x_", "staggered_y_", "staggered_z_"),
+	component_names = ("u_face_x", "u_face_y", "u_face_z"),
+	ext = ".vtr",
+)
+	x_map = _series_suffix_map(vtk_dir; prefix = prefixes[1], ext)
+	y_map = _series_suffix_map(vtk_dir; prefix = prefixes[2], ext)
+	z_map = _series_suffix_map(vtk_dir; prefix = prefixes[3], ext)
+
+	suffixes = sort!(collect(intersect(intersect(keys(x_map), keys(y_map)), keys(z_map))))
+	isempty(suffixes) && error("no common staggered x/y/z timesteps found in $(vtk_dir)")
+
+	return [
+		read_staggered_vtk_velocity_components(
+			vtk_dir,
+			suffix;
+			prefixes,
+			component_names,
+			ext,
+		)
+		for suffix in suffixes
+	]
+end
+
+# Reading
+############################################################
+# Writing
 
 function write_pvd(path, entries)
 	open(path, "w") do io
