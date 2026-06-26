@@ -43,9 +43,9 @@ getparams() = (;
 
     # Time integration
     # dt = 0.5e-3,
-    dt = 0.001,
+    dt = 0.014,
     nsubstep = 1, # Steps between plot updates
-    nstep = 10000,
+    nstep = 720,
 )
 
 "Left index `n` times away in direction `i`."
@@ -1124,8 +1124,8 @@ function solveandplot_mat(u, Bub, setup, Precomp_SH, L, visualize=false)
     params = getparams()
     (; dt, nsubstep, nstep) = params
     vtk_every = 5
-    vtk_dir = joinpath("output", "vtk_L_0_1")
-    bubble_log_path = joinpath("output", "bubble_L_0_1", "bubble_history.txt")
+    vtk_dir = joinpath("output", "vtk_L_0_1_new")
+    bubble_log_path = joinpath("output", "bubble_L_0_1_new", "bubble_history.txt")
     flow_centered_series = Vector{Tuple{Float64,String}}()
     staggered_x_series = Vector{Tuple{Float64,String}}()
     staggered_y_series = Vector{Tuple{Float64,String}}()
